@@ -1,0 +1,48 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ---
+.venv/
+.venv-stage0/
+venv/
+env/
+ENV/
+
+# --- Models & large/regenerable artifacts ---
+# Model weights are large (multi-GB) and downloaded separately; do not commit.
+models/
+stage0/hf-cache/
+stage0/results/
+*.bin
+*.gguf
+*.pt
+*.ct2
+*.onnx
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+*.swp
+
+# --- Claude ---
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
