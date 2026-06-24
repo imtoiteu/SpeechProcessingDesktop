@@ -1,63 +1,148 @@
-# vnstt — Local-first Vietnamese Speech-to-Text
+# STTLive — Local-first Vietnamese Speech-to-Text + Text-to-Speech
 
-Phase 1 (MVP): transcribe a local **audio** file to Vietnamese text with timestamps and
-export **TXT / SRT / VTT**. Architecture, decisions, and roadmap are in [`docs/`](docs/).
+A local-first Vietnamese **STT + TTS** workbench optimized for Apple Silicon, built on
+[WhisperLiveKit](WhisperLiveKit/) (streaming/batch ASR) with an integrated
+[VieNeu-TTS](VieNeu-TTS/) text-to-speech sidecar. Everything runs on-device; nothing is
+sent to a cloud API. Research, architecture decisions, and the benchmark plan live in
+[`docs/`](docs/).
 
-- **Model:** PhoWhisper-medium (VinAI, BSD-3-Clause)
-- **Engine (Apple Silicon default):** **whisper.cpp / Metal** via `pywhispercpp` — RTF ~0.16 on M3
-- **Engine (alt / cross-platform):** faster-whisper (CTranslate2), `int8` on CPU — accuracy reference, CUDA servers
-- Both behind a swappable `ASREngine` abstraction; pick with `--engine`
-- **VAD:** Silero (faster-whisper path) · **Decode:** ffmpeg
+## Features
 
-> Status: Phase 1. Video, real-time microphone, a UI, and an optional correction LLM are deferred
-> (see [docs/10-implementation-decision.md](docs/10-implementation-decision.md)).
+- **Real-time microphone transcription** — streaming Vietnamese ASR via MLX-Whisper
+  (`large-v3-turbo`), with a live web UI.
+- **Batch file / video transcription with model benchmarking** — transcribe the *same*
+  file with **ChunkFormer** (Vietnamese CTC, default) or **Whisper** `tiny` / `base` /
+  `small` / `medium` / `large-v3-turbo`, each running its real model, to compare
+  accuracy / speed / memory.
+- **Text-to-Speech** — VieNeu-TTS with selectable models, built-in Vietnamese voices
+  (Northern/Southern, male/female), Text **or** URL input, and low-latency streaming
+  playback.
+- **One web UI, two tabs** — *Speech → Text* and *Text → Speech*.
+
+## Architecture
+
+Three isolated runtimes, each in its own virtual environment, talking over HTTP:
+
+```
+Browser — STTLive web UI (http://localhost:8000)
+   ├─ "Speech → Text" tab ─▶ WhisperLiveKit server (:8000)            [.venv]
+   │                            ├─ Streaming: MLX-Whisper (in-process singleton)
+   │                            └─ Batch:     ChunkFormer subprocess  [.venv-chunkformer]
+   │                                          or MLX-Whisper (per-model)
+   └─ "Text → Speech" tab ─▶ VieNeu-TTS sidecar (:8011)               [VieNeu-TTS/.venv]
+```
+
+| Environment | Used by | Notes |
+|---|---|---|
+| `.venv` | STT (WhisperLiveKit + MLX-Whisper) | torch + `mlx_whisper`; serves the web UI |
+| `VieNeu-TTS/.venv` | TTS sidecar | **torch-free** (GGUF via llama.cpp + ONNX codec) |
+| `.venv-chunkformer` | ChunkFormer batch backend | isolated torch/torchaudio; subprocess only |
+
+The STT and TTS subsystems share **no code, process, or venv** — TTS is an optional
+add-on and the streaming hot path is never touched by it.
 
 ## Setup
 
-Requires **Python 3.12** (not 3.14 — ASR runtimes lag new releases), `ffmpeg`, and [`uv`](https://docs.astral.sh/uv/).
+Requires **Python 3.12** (ASR/TTS runtimes lag newer releases), `ffmpeg`, and
+[`uv`](https://docs.astral.sh/uv/). Apple Silicon recommended (MLX).
+
+### 1. STT server (required)
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv -e .
-
-# Default engine: whisper.cpp / Metal — GGML weights (~1.5 GB)
-.venv/bin/python -c "from huggingface_hub import snapshot_download; \
-snapshot_download('dongxiat/ggml-PhoWhisper-medium', local_dir='models/ggml-phowhisper-medium')"
-
-# Optional alt engine: faster-whisper — CT2 weights (~1.4 GB)
-.venv/bin/python -c "from huggingface_hub import snapshot_download; \
-snapshot_download('quocphu/PhoWhisper-ct2-FasterWhisper', \
-allow_patterns=['PhoWhisper-medium-ct2-fasterWhisper/*'], local_dir='models')"
+uv pip install --python .venv -e ./WhisperLiveKit   # installs the whisperlivekit-server CLI
+uv pip install --python .venv mlx-whisper            # Apple-Silicon ASR backend
 ```
 
-## Usage
+Models download lazily from the Hugging Face hub on first use — nothing to pre-fetch.
+
+### 2. TTS sidecar (optional)
+
+Reuses `VieNeu-TTS/.venv` (torch-free). See [docs/TTS_INTEGRATION.md](docs/TTS_INTEGRATION.md)
+for details; the short version:
 
 ```bash
-# whisper.cpp / Metal (default, fast on Apple Silicon)
-.venv/bin/transcribe path/to/audio.mp3 --format txt,srt,vtt
-# writes audio.txt, audio.srt, audio.vtt next to the input
-
-# faster-whisper (CPU; accuracy reference / CUDA servers)
-.venv/bin/transcribe path/to/audio.mp3 --engine faster-whisper --format srt
-
-# video works through the same pipeline (ffmpeg extracts the audio)
-.venv/bin/transcribe path/to/video.mp4 --format srt,vtt
-
-# near-real-time streaming
-.venv/bin/transcribe --mic                       # live microphone (Ctrl-C to stop)
-.venv/bin/transcribe path/to/audio.wav --stream  # simulated real-time from a file
+cd VieNeu-TTS && uv sync
+# `uv sync` does NOT install these two (they live only in the heavy gpu group):
+uv pip install --python .venv "llama-cpp-python==0.3.16" \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal/ \
+    --index-strategy unsafe-best-match      # GGUF backbone (required)
+uv pip install --python .venv "trafilatura>=2.0.0"   # URL extraction (optional)
+cd ..
 ```
 
-Options: `--engine whisper.cpp|faster-whisper`, `--model <path>` (defaults per engine),
-`--language vi`, `--format txt,srt,vtt`, `--output-base <prefix>` (faster-whisper: `--device`, `--compute-type`).
+### 3. ChunkFormer batch backend (optional)
+
+For Vietnamese batch transcription / benchmarking. Fully isolated — see
+[docs/CHUNKFORMER_TEST.md](docs/CHUNKFORMER_TEST.md):
+
+```bash
+uv venv --python 3.12 .venv-chunkformer
+uv pip install --python .venv-chunkformer -r requirements-chunkformer.txt
+```
+
+## Run
+
+```bash
+# STT server + web UI on :8000
+whisperlivekit-server \
+  --model large-v3-turbo \
+  --backend mlx-whisper \
+  --backend-policy simulstreaming \
+  --language auto \
+  --host localhost --port 8000
+
+# (optional) TTS sidecar on :8011 — preflights deps, powers the "Text → Speech" tab
+./scripts/run_tts_server.sh
+```
+
+Then open **http://localhost:8000**:
+
+- **Speech → Text** — choose **Streaming** (live mic) or **Batch** (upload audio/video),
+  pick a model, and transcribe. Results show clickable timestamps; export is available.
+- **Text → Speech** — pick a model + voice, type text or paste a URL, and stream the audio.
+
+> Exact run/stop commands and environment variables are in [`run.md`](run.md).
+
+## Models
+
+| Mode | Default | Alternatives |
+|---|---|---|
+| **Streaming** (mic) | `large-v3-turbo` | `tiny` · `base` · `small` · `medium` — switching requires a server restart (`--model <size>`; the engine is a startup singleton) |
+| **Batch** (file/video) | **ChunkFormer** (Vietnamese) | `tiny` · `base` · `small` · `medium` · `large-v3-turbo` — each runs its real MLX model. `large-v3` is intentionally excluded (too heavy for testing). |
+| **TTS** | `q8` (High Quality) | `q4` (Fast/Light) · `ngochuyen` (LoRA) — 6 built-in Vietnamese voices (q4/q8); voice cloning is not available in the torch-free build. |
+
+Batch Whisper sizes download lazily on first use (~75 MB tiny → ~1.5 GB turbo) and the
+last-used size stays warm in memory. `/health` reports which backends are available and
+the UI disables any that aren't.
 
 ## Tests
 
 ```bash
-uv pip install --python .venv pytest
-.venv/bin/pytest -q          # export tests run anywhere; smoke test needs the model
+# STT + batch-backend + UI/export tests
+.venv/bin/python -m pytest tests/ --ignore=tests/tts -q
+
+# TTS tests (skip automatically unless the `vieneu` SDK is importable)
+VieNeu-TTS/.venv/bin/python -m pytest tests/tts -q
 ```
+
+## Legacy CLI (Phase-1 MVP)
+
+The original offline file transcriber (`vnstt` package, PhoWhisper-medium) is still
+available via the `transcribe` console script — useful as an accuracy reference:
+
+```bash
+.venv/bin/transcribe path/to/audio.mp3 --format txt,srt,vtt
+.venv/bin/transcribe path/to/audio.mp3 --engine faster-whisper --format srt
+```
+
+See the project history in [`docs/`](docs/) (e.g.
+[docs/10-implementation-decision.md](docs/10-implementation-decision.md)) for how the
+project evolved from this CLI to the current streaming app.
 
 ## License
 
-Code: see repository. Model: PhoWhisper is BSD-3-Clause (VinAI Research).
+This repository vendors third-party components, each under its own license:
+[WhisperLiveKit/](WhisperLiveKit/), [VieNeu-TTS/LICENSE](VieNeu-TTS/LICENSE). Model
+weights (PhoWhisper, Whisper, ChunkFormer, VieNeu-TTS) are governed by their respective
+model cards. Use is intended for local, non-commercial research.
