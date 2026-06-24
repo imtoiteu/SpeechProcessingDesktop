@@ -15,6 +15,8 @@ htmlcov/
 # --- Virtual environments ---
 .venv/
 .venv-stage0/
+.venv-tts/
+.venv-chunkformer/
 venv/
 env/
 ENV/
@@ -51,3 +53,10 @@ Thumbs.db
 faster-whisper/
 WhisperLive/
 whisper_streaming/
+
+# --- TTS (Fish-Speech) ---
+# Vendored Fish-Speech clone + its weights and runtime data (large / regenerable).
+fish-speech/
+checkpoints/
+tts-data/
+tts-output/

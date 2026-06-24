@@ -4,11 +4,71 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WhisperLiveKit</title>
+    <title>STTLive</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+Display:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap" />
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>" />
     <link rel="stylesheet" href="live_transcription.css" />
 </head>
 
 <body>
+    <!-- Decorative background layer (grid + ambient orbs), purely cosmetic. -->
+    <div class="app-bg" aria-hidden="true">
+        <div class="grid-overlay"></div>
+        <div class="ambient-orb orb-1"></div>
+        <div class="ambient-orb orb-2"></div>
+        <div class="ambient-orb orb-3"></div>
+    </div>
+
+    <!-- Persistent branded header: brand, mode tabs and theme toggle stay
+         visible in both the STT and TTS views. -->
+    <header class="app-header">
+        <div class="brand">
+            <div class="brand-badge">🎙️</div>
+            <div class="brand-titles">
+                <h1 class="brand-title">STTLive</h1>
+                <p class="brand-sub">Vietnamese Speech-to-Text &mdash; streaming &amp; batch on Apple Silicon</p>
+            </div>
+        </div>
+
+        <!-- TTS integration: mode tabs. Additive; STT view is the default. -->
+        <div class="app-tabs" role="tablist" aria-label="Mode selector">
+            <button id="tab-stt" class="app-tab is-active" type="button" role="tab" aria-selected="true">Speech&nbsp;&rarr;&nbsp;Text</button>
+            <button id="tab-tts" class="app-tab" type="button" role="tab" aria-selected="false">Text&nbsp;&rarr;&nbsp;Speech</button>
+        </div>
+
+        <div class="header-actions">
+            <div class="brand-chips">
+                <span class="chip">Vietnamese</span>
+                <span class="chip">Local-first</span>
+            </div>
+            <div class="theme-selector-container">
+                <div class="segmented" role="radiogroup" aria-label="Theme selector">
+                    <input type="radio" id="theme-system" name="theme" value="system" />
+                    <label for="theme-system" title="System">
+                        <img src="/web/src/system_mode.svg" alt="" />
+                        <span>System</span>
+                    </label>
+
+                    <input type="radio" id="theme-light" name="theme" value="light" />
+                    <label for="theme-light" title="Light">
+                        <img src="/web/src/light_mode.svg" alt="" />
+                        <span>Light</span>
+                    </label>
+
+                    <input type="radio" id="theme-dark" name="theme" value="dark" />
+                    <label for="theme-dark" title="Dark">
+                        <img src="/web/src/dark_mode.svg" alt="" />
+                        <span>Dark</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </header>
+
     <div class="header-container">
         <div class="settings-container">
             <div class="buttons-container">
@@ -39,7 +99,7 @@
                 </div>
 
                 <select id="languageSelect" class="control-select" title="Transcription language" aria-label="Transcription language"></select>
-                <select id="modelSelect" class="control-select" title="ASR model — restart the server to change" aria-label="ASR model"></select>
+                <select id="modelSelect" class="control-select" title="ASR model — Batch can use ChunkFormer or large-v3-turbo; Streaming uses large-v3-turbo (restart to change)" aria-label="ASR model"></select>
                 <button id="startBtn" type="button" class="start-button" disabled title="Start transcribing the selected file">Start Transcription</button>
             </div>
 
@@ -54,28 +114,6 @@
                     <select id="microphoneSelect">
                         <option value="">Default Microphone</option>
                     </select>
-                </div>
-
-                <div class="theme-selector-container">
-                    <div class="segmented" role="radiogroup" aria-label="Theme selector">
-                        <input type="radio" id="theme-system" name="theme" value="system" />
-                        <label for="theme-system" title="System">
-                            <img src="/web/src/system_mode.svg" alt="" />
-                            <span>System</span>
-                        </label>
-
-                        <input type="radio" id="theme-light" name="theme" value="light" />
-                        <label for="theme-light" title="Light">
-                            <img src="/web/src/light_mode.svg" alt="" />
-                            <span>Light</span>
-                        </label>
-
-                        <input type="radio" id="theme-dark" name="theme" value="dark" />
-                        <label for="theme-dark" title="Dark">
-                            <img src="/web/src/dark_mode.svg" alt="" />
-                            <span>Dark</span>
-                        </label>
-                    </div>
                 </div>
             </div>
         </div>
@@ -95,10 +133,410 @@
             <button id="clearBtn" type="button" title="Clear the transcript">Clear</button>
             <label class="ts-toggle"><input type="checkbox" id="showTimestamps" checked /> Timestamps</label>
         </div>
-        <div id="linesTranscript"></div>
+        <div class="surface-card transcript-card">
+            <div id="linesTranscript"></div>
+        </div>
     </div>
 
+    <!-- TTS integration: Text-to-Speech view (hidden unless the TTS tab is active). -->
+    <div id="ttsView" class="tts-view">
+        <div class="tts-panel">
+            <div class="tts-head">
+                <div>
+                    <h2 class="tts-title">Text to Speech</h2>
+                    <p class="tts-sub">High-fidelity Vietnamese TTS &mdash; low-latency streaming with built-in voices.</p>
+                </div>
+                <div class="tts-chips">
+                    <span class="chip">24 kHz</span>
+                    <span class="chip">Streaming</span>
+                </div>
+            </div>
+            <p id="ttsStatus" class="tts-status"></p>
+
+            <div class="tts-grid">
+                <!-- Input column (Text / URL) -->
+                <div class="tts-input-col">
+                    <div class="tts-inrow">
+                        <div class="segmented tts-inputmode" role="radiogroup" aria-label="Input mode">
+                            <input type="radio" id="ttsModeText" name="ttsInputMode" value="text" checked />
+                            <label for="ttsModeText">Text</label>
+                            <input type="radio" id="ttsModeUrl" name="ttsInputMode" value="url" />
+                            <label for="ttsModeUrl">URL</label>
+                        </div>
+                        <span id="ttsCharCount" class="tts-meta">0 chars</span>
+                    </div>
+
+                    <div id="ttsUrlBox" class="tts-urlbox hidden">
+                        <input id="ttsUrl" type="url" class="tts-input" placeholder="https://example.com/article…" />
+                        <button id="ttsExtract" class="tts-secondary-btn" type="button">Extract text</button>
+                    </div>
+
+                    <textarea id="ttsText" class="tts-textarea tts-bigtext" placeholder="Nhập văn bản cần đọc thành giọng nói…" spellcheck="false"></textarea>
+                    <div class="tts-inrow">
+                        <span class="tts-meta">Tip: punctuation helps natural pauses.</span>
+                        <span id="ttsSegEst" class="tts-meta">~1 segment</span>
+                    </div>
+                </div>
+
+                <!-- Controls column -->
+                <div class="tts-ctrl-col">
+                    <div class="panel-card">
+                        <label class="tts-label" for="ttsModel">Model</label>
+                        <select id="ttsModel" class="control-select"></select>
+                        <p id="ttsModelDesc" class="tts-hint"></p>
+                    </div>
+
+                    <div class="panel-card">
+                        <label class="tts-label" for="ttsVoice">Voice</label>
+                        <select id="ttsVoice" class="control-select"></select>
+                    </div>
+
+                    <div class="tts-visualizer">
+                        <span class="tts-visualizer-label">Live spectrum</span>
+                        <canvas id="ttsCanvas" width="600" height="96"></canvas>
+                    </div>
+
+                    <div class="panel-card tts-actions">
+                        <button id="ttsGenerate" class="start-button" type="button">Generate speech</button>
+                        <button id="ttsStop" class="btn-stop hidden" type="button">&#9209; Stop</button>
+                        <div class="tts-statusrow">
+                            <span id="ttsStatusChip" class="tts-status-chip"><span class="tts-dot"></span><span id="ttsStatusLabel">READY</span></span>
+                            <span id="ttsLatency" class="tts-meta"></span>
+                        </div>
+                        <a id="ttsDownload" class="tts-download hidden" download>&#11015; Download WAV</a>
+                    </div>
+
+                    <details class="tts-advanced">
+                        <summary>Advanced</summary>
+                        <div class="tts-field">
+                            <label class="tts-label" for="ttsTemp">Temperature <span id="ttsTempVal">0.70</span></label>
+                            <input id="ttsTemp" type="range" min="0.1" max="1.0" step="0.05" value="0.7" />
+                        </div>
+                        <div class="tts-field">
+                            <label class="tts-label" for="ttsServerUrl">TTS server URL</label>
+                            <input id="ttsServerUrl" type="text" class="tts-input" placeholder="http://host:8011" />
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="app-footer">WhisperLiveKit &middot; MLX Whisper &amp; ChunkFormer &middot; Local-first STT</footer>
+
     <script src="live_transcription.js"></script>
+
+    <!-- TTS integration: isolated controller. Lives in its own <script> so it is
+         fully independent of the STT script above (a fault in one cannot break
+         the other). Mirrors the VieNeu-TTS streaming app: model + voice selection,
+         Text/URL input, and low-latency streaming playback with a live spectrum. -->
+    <script>
+    (function () {
+        "use strict";
+        function $(id) { return document.getElementById(id); }
+
+        // --- server URL resolution (default: same host, sidecar port 8011) ---
+        var LS_KEY = "ttsServerUrl";
+        function defaultBase() {
+            var p = location.protocol === "https:" ? "https:" : "http:";
+            return p + "//" + (location.hostname || "localhost") + ":8011";
+        }
+        function getBase() {
+            var i = $("ttsServerUrl");
+            var v = (i && i.value && i.value.trim()) || "";
+            if (!v) { v = localStorage.getItem(LS_KEY) || defaultBase(); }
+            return v.replace(/\/+$/, "");
+        }
+        function parseDetail(t) { try { return JSON.parse(t).detail || t; } catch (e) { return t; } }
+        function setStatus(msg, isError) {
+            var el = $("ttsStatus"); if (!el) return;
+            el.textContent = msg || ""; el.classList.toggle("is-error", !!isError);
+        }
+
+        var STATE = {
+            IDLE: ["READY", ""], CONNECTING: ["BUFFERING", "is-connecting"],
+            PLAYING: ["STREAMING", "is-playing"], DONE: ["COMPLETED", "is-done"],
+            ERROR: ["ERROR", "is-error"]
+        };
+        function setChip(state) {
+            var chip = $("ttsStatusChip"), lab = $("ttsStatusLabel"); if (!chip) return;
+            var s = STATE[state] || STATE.IDLE; lab.textContent = s[0];
+            chip.className = "tts-status-chip " + s[1];
+        }
+
+        // --- tab switching (toggles body.tts-mode; STT DOM untouched) ---
+        function activate(which) {
+            var stt = which === "stt";
+            document.body.classList.toggle("tts-mode", !stt);
+            var t1 = $("tab-stt"), t2 = $("tab-tts");
+            if (t1) { t1.classList.toggle("is-active", stt); t1.setAttribute("aria-selected", stt ? "true" : "false"); }
+            if (t2) { t2.classList.toggle("is-active", !stt); t2.setAttribute("aria-selected", !stt ? "true" : "false"); }
+            if (!stt) { checkHealth(); loadModels(); loadVoices(); }
+        }
+
+        function checkHealth() {
+            fetch(getBase() + "/tts/health").then(function (r) { return r.json(); }).then(function (h) {
+                if (!h.checkpoints_present) {
+                    setStatus("TTS server up; model not cached yet (downloads on first use).");
+                } else if (h.model_loaded) {
+                    setStatus("Ready · " + (h.model_key || "") + " · " + (h.n_voices || 0) + " voices · " + (h.device || "cpu"));
+                } else {
+                    setStatus("Ready (model loads on first request) · " + (h.model_key || ""));
+                }
+            }).catch(function () {
+                setStatus("Cannot reach TTS server at " + getBase() + ". Start it with scripts/run_tts_server.sh.", true);
+            });
+        }
+
+        // --- models (mirrors VieNeu web_stream /models + /set_model) ---
+        function loadModels() {
+            var sel = $("ttsModel"); if (!sel) return;
+            fetch(getBase() + "/tts/models").then(function (r) { return r.json(); }).then(function (d) {
+                sel.innerHTML = ""; var active = null;
+                (d.models || []).forEach(function (m) {
+                    var o = document.createElement("option");
+                    o.value = m.key; o.textContent = m.name; o.dataset.desc = m.desc || "";
+                    if (m.active) { o.selected = true; active = m; }
+                    sel.appendChild(o);
+                });
+                if ($("ttsModelDesc")) $("ttsModelDesc").textContent = (active && active.desc) || "";
+            }).catch(function () { /* health() reported the outage */ });
+        }
+        function onModelChange() {
+            var sel = $("ttsModel"); var key = sel.value;
+            var opt = sel.options[sel.selectedIndex];
+            if ($("ttsModelDesc")) $("ttsModelDesc").textContent = (opt && opt.dataset.desc) || "";
+            setStatus("Switching model to " + key + "…"); sel.disabled = true;
+            fetch(getBase() + "/tts/model", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model_key: key })
+            }).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(parseDetail(t)); });
+                return r.json();
+            }).then(function (d) {
+                fillVoices(d.voices || []);
+                setStatus("Model: " + (d.model_key || key) + " · " + ((d.voices || []).length) + " voices");
+            }).catch(function (e) { setStatus("Model switch failed: " + e.message, true); })
+              .finally(function () { sel.disabled = false; });
+        }
+
+        // --- voices ---
+        function fillVoices(voices) {
+            var sel = $("ttsVoice"); if (!sel) return;
+            var cur = sel.value; sel.innerHTML = "";
+            var def = document.createElement("option");
+            def.value = ""; def.textContent = "Default voice"; sel.appendChild(def);
+            voices.forEach(function (v) {
+                var o = document.createElement("option");
+                o.value = v.id; o.textContent = v.name || v.id; sel.appendChild(o);
+            });
+            if (cur) sel.value = cur;
+        }
+        function loadVoices() {
+            fetch(getBase() + "/tts/voices").then(function (r) { return r.json(); })
+                .then(function (d) { fillVoices(d.voices || []); }).catch(function () {});
+        }
+
+        // --- input mode + counters ---
+        function inputMode() { var u = $("ttsModeUrl"); return (u && u.checked) ? "url" : "text"; }
+        function updateCounts() {
+            var t = ($("ttsText").value || "");
+            $("ttsCharCount").textContent = t.length + " chars";
+            var seg = Math.max(1, Math.ceil(t.length / 160));
+            $("ttsSegEst").textContent = "~" + seg + " segment" + (seg > 1 ? "s" : "");
+        }
+        function syncMode() { $("ttsUrlBox").classList.toggle("hidden", inputMode() !== "url"); }
+        function extractUrl() {
+            var url = ($("ttsUrl").value || "").trim();
+            if (!url) { setStatus("Enter a URL first.", true); return; }
+            setStatus("Extracting article…"); $("ttsExtract").disabled = true;
+            fetch(getBase() + "/tts/extract_url", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: url, max_chars: 5000 })
+            }).then(function (r) { return r.json(); }).then(function (d) {
+                if (d.status !== "ok") { setStatus("Extract failed: " + (d.message || "unknown"), true); return; }
+                $("ttsText").value = d.text || ""; updateCounts();
+                $("ttsModeText").checked = true; syncMode();
+                setStatus("Extracted " + (d.char_count || 0) + " chars" + (d.title ? (" · " + d.title) : "") + (d.truncated ? " (truncated)" : ""));
+            }).catch(function (e) { setStatus("Extract failed: " + e.message, true); })
+              .finally(function () { $("ttsExtract").disabled = false; });
+        }
+
+        // --- streaming playback (Web Audio), adapted from VieNeu client.html ---
+        var SR = 24000, ctx = null, playing = false, abortCtl = null, analyser = null,
+            rafId = 0, pcmChunks = [], dlUrl = null;
+
+        function setGenerating(on) {
+            $("ttsGenerate").classList.toggle("hidden", on);
+            $("ttsStop").classList.toggle("hidden", !on);
+        }
+        function stop() {
+            playing = false;
+            if (abortCtl) { try { abortCtl.abort(); } catch (e) {} abortCtl = null; }
+            if (ctx) { try { ctx.close(); } catch (e) {} ctx = null; }
+            analyser = null; cancelAnimationFrame(rafId); drawIdle(); setGenerating(false);
+        }
+        function concat(a, b) { var c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); return c; }
+
+        function generate() {
+            var text = ($("ttsText").value || "").trim();
+            if (!text) { setStatus("Please enter some text.", true); return; }
+            stop();
+            $("ttsDownload").classList.add("hidden"); pcmChunks = [];
+            var voice = $("ttsVoice").value || "";
+            var temp = parseFloat($("ttsTemp").value);
+            var t0 = Date.now(), firstAt = null;
+            playing = true; setGenerating(true); setChip("CONNECTING"); setStatus("Buffering…");
+
+            var AC = window.AudioContext || window.webkitAudioContext;
+            var url = getBase() + "/tts/stream?text=" + encodeURIComponent(text) +
+                (voice ? ("&voice=" + encodeURIComponent(voice)) : "") +
+                (isFinite(temp) ? ("&temperature=" + temp) : "");
+            if (!AC) { return fallbackBlob(url); }
+
+            ctx = new AC({ sampleRate: SR });
+            if (ctx.state === "suspended") { ctx.resume(); }
+            analyser = ctx.createAnalyser(); analyser.fftSize = 256; analyser.connect(ctx.destination);
+            drawSpectrum();
+
+            abortCtl = new AbortController();
+            var nextTime = ctx.currentTime + 0.08, headerSkipped = false, pending = new Uint8Array(0);
+
+            fetch(url, { signal: abortCtl.signal }).then(function (resp) {
+                if (!resp.ok || !resp.body) { return resp.text().then(function (t) { throw new Error(parseDetail(t)); }); }
+                var reader = resp.body.getReader();
+                function pump() {
+                    return reader.read().then(function (res) {
+                        if (res.done) { finish(); return; }
+                        pending = concat(pending, res.value);
+                        if (!headerSkipped) {
+                            if (pending.length < 44) { return pump(); }
+                            pending = pending.slice(44); headerSkipped = true;
+                        }
+                        var usable = pending.length - (pending.length % 2);
+                        if (usable > 0) {
+                            var block = pending.slice(0, usable); pending = pending.slice(usable);
+                            pcmChunks.push(block);
+                            var i16 = new Int16Array(block.buffer, block.byteOffset, block.byteLength / 2);
+                            var f32 = new Float32Array(i16.length);
+                            for (var i = 0; i < i16.length; i++) { f32[i] = i16[i] / 32768; }
+                            var buf = ctx.createBuffer(1, f32.length, SR);
+                            buf.getChannelData(0).set(f32);
+                            var src = ctx.createBufferSource();
+                            src.buffer = buf; src.connect(analyser);
+                            if (nextTime < ctx.currentTime) nextTime = ctx.currentTime;
+                            src.start(nextTime); nextTime += buf.duration;
+                            if (firstAt === null) {
+                                firstAt = Date.now() - t0;
+                                $("ttsLatency").textContent = "First audio " + firstAt + " ms";
+                                setChip("PLAYING"); setStatus("Streaming…");
+                            }
+                        }
+                        return pump();
+                    });
+                }
+                return pump();
+            }).catch(function (e) {
+                if (e.name !== "AbortError") { setChip("ERROR"); setStatus("Error: " + e.message, true); setGenerating(false); }
+            });
+
+            function finish() {
+                var wait = Math.max(0, (nextTime - (ctx ? ctx.currentTime : 0)) * 1000);
+                setTimeout(function () {
+                    if (!playing) return;
+                    setChip("DONE"); setStatus("Completed."); buildDownload(); setGenerating(false);
+                    setTimeout(function () { if (playing) setChip("IDLE"); }, 1500);
+                }, wait + 60);
+            }
+        }
+
+        function fallbackBlob(url) {
+            abortCtl = new AbortController();
+            fetch(url, { signal: abortCtl.signal }).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(parseDetail(t)); });
+                return r.arrayBuffer();
+            }).then(function (ab) {
+                var blob = new Blob([ab], { type: "audio/wav" });
+                if (dlUrl) URL.revokeObjectURL(dlUrl); dlUrl = URL.createObjectURL(blob);
+                var a = $("ttsDownload"); a.href = dlUrl; a.download = "vieneu_tts.wav"; a.classList.remove("hidden");
+                new Audio(dlUrl).play().catch(function () {});
+                setChip("DONE"); setStatus("Completed."); setGenerating(false);
+            }).catch(function (e) {
+                if (e.name !== "AbortError") { setChip("ERROR"); setStatus("Error: " + e.message, true); setGenerating(false); }
+            });
+        }
+
+        function buildDownload() {
+            if (!pcmChunks.length) return;
+            var total = 0; pcmChunks.forEach(function (c) { total += c.length; });
+            var ab = new ArrayBuffer(44 + total), dv = new DataView(ab);
+            function ws(o, s) { for (var i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); }
+            ws(0, "RIFF"); dv.setUint32(4, 36 + total, true); ws(8, "WAVE"); ws(12, "fmt ");
+            dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+            dv.setUint32(24, SR, true); dv.setUint32(28, SR * 2, true); dv.setUint16(32, 2, true);
+            dv.setUint16(34, 16, true); ws(36, "data"); dv.setUint32(40, total, true);
+            var bytes = new Uint8Array(ab), off = 44;
+            pcmChunks.forEach(function (c) { bytes.set(c, off); off += c.length; });
+            var blob = new Blob([ab], { type: "audio/wav" });
+            if (dlUrl) URL.revokeObjectURL(dlUrl); dlUrl = URL.createObjectURL(blob);
+            var a = $("ttsDownload"); a.href = dlUrl; a.download = "vieneu_tts.wav"; a.classList.remove("hidden");
+        }
+
+        // --- visualizer ---
+        function drawSpectrum() {
+            var canvas = $("ttsCanvas"); if (!canvas) return; var c = canvas.getContext("2d");
+            var bins = analyser ? analyser.frequencyBinCount : 128, data = new Uint8Array(bins);
+            function frame() {
+                if (!analyser) return;
+                analyser.getByteFrequencyData(data);
+                var dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || 600, h = canvas.clientHeight || 96;
+                if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+                c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+                var bars = 48, step = Math.max(1, Math.floor(bins / bars)), bw = w / bars, mh = h - 8;
+                var g = c.createLinearGradient(0, h, 0, 0);
+                g.addColorStop(0, "rgba(45,212,191,0.9)"); g.addColorStop(0.6, "rgba(245,158,11,0.9)");
+                g.addColorStop(1, "rgba(251,113,133,0.85)");
+                for (var i = 0; i < bars; i++) {
+                    var v = data[i * step] / 255; var bh = Math.max(3, v * mh);
+                    c.fillStyle = g; c.globalAlpha = 0.35 + v * 0.65;
+                    c.fillRect(i * bw + 1, h - bh, bw - 2, bh);
+                }
+                c.globalAlpha = 1; rafId = requestAnimationFrame(frame);
+            }
+            frame();
+        }
+        function drawIdle() {
+            var canvas = $("ttsCanvas"); if (!canvas) return;
+            var c = canvas.getContext("2d"); c.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function init() {
+            var s = $("ttsServerUrl");
+            if (s) {
+                s.value = localStorage.getItem(LS_KEY) || defaultBase();
+                s.addEventListener("change", function () {
+                    localStorage.setItem(LS_KEY, s.value.trim());
+                    checkHealth(); loadModels(); loadVoices();
+                });
+            }
+            var temp = $("ttsTemp");
+            if (temp) temp.addEventListener("input", function () { $("ttsTempVal").textContent = parseFloat(temp.value).toFixed(2); });
+            var txt = $("ttsText"); if (txt) txt.addEventListener("input", updateCounts);
+            ["ttsModeText", "ttsModeUrl"].forEach(function (id) { var el = $(id); if (el) el.addEventListener("change", syncMode); });
+            var ms = $("ttsModel"); if (ms) ms.addEventListener("change", onModelChange);
+            var bind = [["tab-stt", function () { activate("stt"); }], ["tab-tts", function () { activate("tts"); }],
+                        ["ttsGenerate", generate], ["ttsStop", stop], ["ttsExtract", extractUrl]];
+            bind.forEach(function (p) { var el = $(p[0]); if (el) el.addEventListener("click", p[1]); });
+            updateCounts(); syncMode();
+        }
+
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", init);
+        } else {
+            init();
+        }
+    })();
+    </script>
 </body>
 
 </html>

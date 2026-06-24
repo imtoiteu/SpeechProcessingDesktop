@@ -1,0 +1,9 @@
+# ChunkFormer Vietnamese ASR — TEST ONLY, install into a dedicated .venv-chunkformer.
+#
+#   uv venv --python 3.12 .venv-chunkformer
+#   uv pip install --python .venv-chunkformer -r requirements-chunkformer.txt
+#
+# This is a temporary tool to evaluate khanhld/chunkformer-large-vie against the
+# project's Whisper-based STT. Keep it OUT of the STT .venv and the TTS .venv-tts.
+# `chunkformer` pulls its own torch/torchaudio/transformers.
+chunkformer

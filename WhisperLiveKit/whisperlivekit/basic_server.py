@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from whisperlivekit import AudioProcessor, TranscriptionEngine, get_inline_ui_html, parse_args
+from whisperlivekit.batch_backends import batch_backends_status, get_batch_backend
 from whisperlivekit.config import parse_cors_origins
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -51,6 +52,9 @@ async def health():
         "backend": backend,
         "model": model,
         "ready": transcription_engine is not None,
+        # Batch (file) backends selectable from the UI (Whisper sizes + ChunkFormer).
+        # Streaming always uses the in-process Whisper singleton chosen at startup.
+        "batch_backends": batch_backends_status(),
     })
 
 
@@ -288,127 +292,6 @@ async def deepgram_websocket_endpoint(websocket: WebSocket):
 # OpenAI-compatible REST API  (/v1/audio/transcriptions)
 # ---------------------------------------------------------------------------
 
-async def _convert_to_pcm(audio_bytes: bytes) -> bytes:
-    """Convert any audio/video format to PCM s16le mono 16kHz using ffmpeg.
-
-    Decodes from a seekable temp file (``-i <path>``) rather than ``-i pipe:0``.
-    A non-seekable pipe fails on container formats whose moov atom is at the end
-    (the default for most MP4/MOV encoders), so video uploads decoded to 0 bytes.
-    A real file lets ffmpeg seek to the moov atom, so video now decodes correctly.
-    """
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".upload") as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-i", tmp_path,
-            "-f", "s16le", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1",
-            "-loglevel", "error",
-            "pipe:1",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail=f"Audio conversion failed: {stderr.decode().strip()}")
-        return stdout
-    finally:
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-
-def _parse_time_str(time_str: str) -> float:
-    """Parse 'H:MM:SS.cc' to seconds."""
-    parts = time_str.split(":")
-    if len(parts) == 3:
-        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-    if len(parts) == 2:
-        return int(parts[0]) * 60 + float(parts[1])
-    return float(parts[0])
-
-
-def _format_openai_response(front_data, response_format: str, language: Optional[str], duration: float) -> dict:
-    """Convert FrontData to OpenAI-compatible response."""
-    d = front_data.to_dict()
-    lines = d.get("lines", [])
-
-    # Combine all speech text (exclude silence segments)
-    text_parts = [l["text"] for l in lines if l.get("text") and l.get("speaker", 0) != -2]
-    full_text = " ".join(text_parts).strip()
-
-    if response_format == "text":
-        return full_text
-
-    # Build segments and words for verbose_json
-    segments = []
-    words = []
-    for i, line in enumerate(lines):
-        if line.get("speaker") == -2 or not line.get("text"):
-            continue
-        start = _parse_time_str(line.get("start", "0:00:00"))
-        end = _parse_time_str(line.get("end", "0:00:00"))
-        segments.append({
-            "id": len(segments),
-            "start": round(start, 2),
-            "end": round(end, 2),
-            "text": line["text"],
-        })
-        # Split segment text into approximate words with estimated timestamps
-        seg_words = line["text"].split()
-        if seg_words:
-            word_duration = (end - start) / max(len(seg_words), 1)
-            for j, word in enumerate(seg_words):
-                words.append({
-                    "word": word,
-                    "start": round(start + j * word_duration, 2),
-                    "end": round(start + (j + 1) * word_duration, 2),
-                })
-
-    if response_format == "verbose_json":
-        return {
-            "task": "transcribe",
-            "language": language or "unknown",
-            "duration": round(duration, 2),
-            "text": full_text,
-            "words": words,
-            "segments": segments,
-        }
-
-    if response_format in ("srt", "vtt"):
-        lines_out = []
-        if response_format == "vtt":
-            lines_out.append("WEBVTT\n")
-        for i, seg in enumerate(segments):
-            start_ts = _srt_timestamp(seg["start"], response_format)
-            end_ts = _srt_timestamp(seg["end"], response_format)
-            if response_format == "srt":
-                lines_out.append(f"{i + 1}")
-            lines_out.append(f"{start_ts} --> {end_ts}")
-            lines_out.append(seg["text"])
-            lines_out.append("")
-        return "\n".join(lines_out)
-
-    # Default: json
-    return {"text": full_text}
-
-
-def _srt_timestamp(seconds: float, fmt: str) -> str:
-    """Format seconds as SRT (HH:MM:SS,mmm) or VTT (HH:MM:SS.mmm) timestamp."""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int(round((seconds % 1) * 1000))
-    sep = "," if fmt == "srt" else "."
-    return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
-
-
 @app.post("/v1/audio/transcriptions")
 async def create_transcription(
     file: UploadFile = File(...),
@@ -418,10 +301,13 @@ async def create_transcription(
     response_format: str = Form(default="json"),
     timestamp_granularities: Optional[List[str]] = Form(default=None),
 ):
-    """OpenAI-compatible audio transcription endpoint.
+    """OpenAI-compatible audio transcription endpoint (batch / file).
 
-    Accepts the same parameters as OpenAI's /v1/audio/transcriptions API.
-    The `model` parameter is accepted but ignored (uses the server's configured backend).
+    Accepts the same parameters as OpenAI's /v1/audio/transcriptions API. The
+    ``model`` field selects the batch backend (see ``batch_backends.get_batch_backend``):
+    a value containing 'chunkformer' routes to the isolated ChunkFormer subprocess;
+    anything else (incl. empty, for OpenAI-compatibility) uses the in-process Whisper engine.
+    Streaming endpoints are unaffected.
     """
     global transcription_engine
 
@@ -430,50 +316,8 @@ async def create_transcription(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Empty audio file")
 
-    # Convert to PCM for pipeline processing
-    pcm_data = await _convert_to_pcm(audio_bytes)
-    duration = len(pcm_data) / (16000 * 2)  # 16kHz, 16-bit
-
-    # Process through the full pipeline
-    processor = AudioProcessor(
-        transcription_engine=transcription_engine,
-        language=language,
-    )
-    # Force PCM input regardless of server config
-    processor.is_pcm_input = True
-
-    results_gen = await processor.create_tasks()
-
-    # Collect results in background while feeding audio
-    final_result = None
-
-    async def collect():
-        nonlocal final_result
-        async for result in results_gen:
-            final_result = result
-
-    collect_task = asyncio.create_task(collect())
-
-    # Feed audio in chunks (1 second each)
-    chunk_size = 16000 * 2  # 1 second of PCM
-    for i in range(0, len(pcm_data), chunk_size):
-        await processor.process_audio(pcm_data[i:i + chunk_size])
-
-    # Signal end of audio
-    await processor.process_audio(b"")
-
-    # Wait for pipeline to finish
-    try:
-        await asyncio.wait_for(collect_task, timeout=120.0)
-    except asyncio.TimeoutError:
-        logger.warning("Transcription timed out after 120s")
-    finally:
-        await processor.cleanup()
-
-    if final_result is None:
-        return JSONResponse({"text": ""})
-
-    result = _format_openai_response(final_result, response_format, language, duration)
+    backend = get_batch_backend(model, transcription_engine)
+    result = await backend.transcribe(audio_bytes, language, response_format)
 
     if isinstance(result, str):
         return PlainTextResponse(result)

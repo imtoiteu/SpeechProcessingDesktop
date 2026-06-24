@@ -1109,13 +1109,44 @@ const LANGUAGES = [
   { code: "vi", label: "Vietnamese" },
   { code: "en", label: "English" },
 ];
-// Extensible: add more entries to offer additional models once they are wired up.
-const MODELS = ["large-v3-turbo"];
+// Models offered per transcription mode, for benchmarking accuracy/speed/memory.
+// Whisper sizes ascending; large-v3 is intentionally omitted (too heavy for testing).
+// Streaming runs the in-process MLX-Whisper singleton (chosen at startup, no hot-swap);
+// Batch can additionally use ChunkFormer (Vietnamese), which runs out-of-process.
+const WHISPER_SIZES = [
+  { value: "tiny", label: "tiny" },
+  { value: "base", label: "base" },
+  { value: "small", label: "small" },
+  { value: "medium", label: "medium" },
+  { value: "large-v3-turbo", label: "large-v3-turbo" },
+];
+// Streaming: large-v3-turbo is the DEFAULT (listed first => first enabled).
+const STREAMING_MODELS = [
+  { value: "large-v3-turbo", label: "large-v3-turbo" },
+  { value: "tiny", label: "tiny" },
+  { value: "base", label: "base" },
+  { value: "small", label: "small" },
+  { value: "medium", label: "medium" },
+];
+// Batch: ChunkFormer is the DEFAULT (first), then Whisper sizes for easy comparison.
+const BATCH_MODELS = [
+  { value: "chunkformer", label: "ChunkFormer (Vietnamese)" },
+  ...WHISPER_SIZES,
+];
 
-let runningModel = null; // what the server actually loaded (from /health)
+let runningModel = null;     // what the server actually loaded (from /health), for streaming
+let batchBackendAvail = {};  // { id: true/false } per batch backend, reported by /health
 
 function getSelectedLanguage() {
   return (languageSelect && languageSelect.value) || "auto";
+}
+
+function getSelectedMode() {
+  return (document.querySelector('input[name="mode"]:checked') || {}).value || "stream";
+}
+
+function getSelectedModel() {
+  return (modelSelect && modelSelect.value) || "large-v3-turbo";
 }
 
 // Append ?language=<code> to a ws/http URL (works with or without an existing query).
@@ -1157,36 +1188,72 @@ if (languageSelect) {
   });
 }
 
-// Populate the model selector and preselect the model the server actually loaded.
-if (modelSelect) {
-  MODELS.forEach((m) => {
+// Streaming uses the model loaded at startup (a singleton, no hot-swap). If the
+// selected streaming model differs from what the server actually loaded, surface an
+// honest "restart with --model X" note rather than silently transcribing with the wrong one.
+function reconcileStreamingModel() {
+  if (getSelectedMode() === "batch") return;
+  const sel = (modelSelect && modelSelect.value) || "large-v3-turbo";
+  if (runningModel && runningModel !== sel && statusText && !statusText.textContent) {
+    statusText.textContent =
+      `Note: streaming uses the model loaded at startup ("${runningModel}"). ` +
+      `To stream with "${sel}", restart the server with --model ${sel}.`;
+  }
+}
+
+// Rebuild the model dropdown for the current mode:
+//   Streaming -> large-v3-turbo only (the in-process engine).
+//   Batch     -> ChunkFormer (default) + large-v3-turbo.
+// Batch backends the server reports as unavailable are shown disabled.
+function repopulateModelSelect() {
+  if (!modelSelect) return;
+  const mode = getSelectedMode();
+  const list = mode === "batch" ? BATCH_MODELS : STREAMING_MODELS;
+  modelSelect.innerHTML = "";
+  list.forEach((m) => {
     const opt = document.createElement("option");
-    opt.value = m;
-    opt.textContent = m;
+    opt.value = m.value;
+    opt.textContent = m.label;
+    if (mode === "batch" && m.value in batchBackendAvail && !batchBackendAvail[m.value]) {
+      opt.disabled = true;
+      opt.textContent = `${m.label} (unavailable — see docs)`;
+    }
     modelSelect.appendChild(opt);
   });
+  // Default to the first enabled option (Batch -> ChunkFormer, Streaming -> large-v3-turbo).
+  const firstEnabled = Array.from(modelSelect.options).find((o) => !o.disabled);
+  if (firstEnabled) modelSelect.value = firstEnabled.value;
+  reconcileStreamingModel();
+}
+
+if (modelSelect) {
+  repopulateModelSelect();
   fetch(getHttpBase() + "/health")
     .then((r) => r.json())
     .then((h) => {
       runningModel = h && h.model ? h.model : null;
-      if (runningModel) {
-        if (!MODELS.includes(runningModel)) {
-          const opt = document.createElement("option");
-          opt.value = runningModel;
-          opt.textContent = runningModel;
-          modelSelect.appendChild(opt);
-        }
-        modelSelect.value = runningModel;
+      if (h && Array.isArray(h.batch_backends)) {
+        h.batch_backends.forEach((b) => {
+          batchBackendAvail[b.id] = !!b.available;
+        });
       }
+      repopulateModelSelect(); // re-render with availability + streaming note
     })
     .catch(() => {});
-  // The model is a singleton built at startup — switching requires a restart.
+
+  // Switching the batch model is free (out-of-process). Only the streaming Whisper engine
+  // is a startup singleton, so warn about a restart there alone.
   modelSelect.addEventListener("change", () => {
-    if (runningModel && modelSelect.value !== runningModel) {
+    if (getSelectedMode() !== "batch" && runningModel && modelSelect.value !== runningModel) {
       statusText.textContent =
         `Model "${modelSelect.value}" requires restarting the server with --model ${modelSelect.value} ` +
         `(cannot hot-swap). Currently running: ${runningModel}.`;
     }
+  });
+
+  // Toggling Streaming/Batch re-populates the available models for that mode.
+  document.querySelectorAll('input[name="mode"]').forEach((radio) => {
+    radio.addEventListener("change", repopulateModelSelect);
   });
 }
 
@@ -1296,13 +1363,24 @@ async function transcribeFileStreaming(file) {
 
 // --- batch transcription via the existing OpenAI-compatible REST endpoint
 async function transcribeFileBatch(file) {
-  statusText.textContent = "Uploading file (batch)…";
+  const model = getSelectedModel();
+  statusText.textContent = model.includes("chunkformer")
+    ? "Transcribing with ChunkFormer (first run loads the model, may take ~20–40s)…"
+    : `Uploading file (batch, ${model})…`;
   const fd = new FormData();
   fd.append("file", file);
+  fd.append("model", model);
   fd.append("response_format", "verbose_json");
   fd.append("language", getSelectedLanguage());
   const resp = await fetch(`${getHttpBase()}/v1/audio/transcriptions`, { method: "POST", body: fd });
-  if (!resp.ok) throw new Error(`server ${resp.status}`);
+  if (!resp.ok) {
+    let detail = `server ${resp.status}`;
+    try {
+      const errData = await resp.json();
+      if (errData && errData.detail) detail = errData.detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
   const data = await resp.json();
   resetTranscriptStore();
   (data.segments || []).forEach((seg) => {

@@ -1,0 +1,46 @@
+# TTS subsystem dependencies — VieNeu-TTS backend.
+#
+# The sidecar (src/tts/*) integrates the VieNeu-TTS SDK directly. The simplest
+# and recommended setup REUSES the VieNeu-TTS virtual environment:
+#
+#   cd VieNeu-TTS && uv sync                 # torch-free core ('vieneu' SDK + deps)
+#   # `uv sync` does NOT install the next two (they live only in the heavy `gpu`
+#   # group). The GGUF backbone needs llama_cpp; URL extraction needs trafilatura:
+#   uv pip install --python .venv "llama-cpp-python==0.3.16" \
+#       --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal/ \
+#       --index-strategy unsafe-best-match
+#   uv pip install --python .venv "trafilatura>=2.0.0"
+#   # then, from the repo root:
+#   ./scripts/run_tts_server.sh              # auto-uses VieNeu-TTS/.venv, preflights deps
+#
+# WARNING: a later bare `uv sync` re-prunes llama-cpp-python — re-run the two
+# `uv pip install` lines above if the sidecar reports it missing.
+#
+# Do NOT install these into the STT .venv — VieNeu pulls llama-cpp-python and an
+# ONNX runtime that are unrelated to the WhisperLiveKit (mlx_whisper) stack.
+#
+# If you instead want a STANDALONE venv for the sidecar, create one and install:
+#
+#   uv venv --python 3.12 .venv-tts
+#   uv pip install --python .venv-tts vieneu          # the VieNeu-TTS SDK
+#   uv pip install --python .venv-tts -r requirements-tts.txt
+#   TTS_VENV=.venv-tts ./scripts/run_tts_server.sh
+#
+# Default runtime config (see src/tts/config.py): mode=standard, backbone
+# pnnbao-ump/VieNeu-TTS-0.3B-q8-gguf (GGUF via llama.cpp + Metal), codec
+# neuphonic/neucodec-onnx-decoder-int8 (ONNX, CPU) — fully torch-free.
+
+# --- VieNeu-TTS SDK (provides the inference core + 6 built-in VN voices) ---
+vieneu
+
+# --- our sidecar's web + audio layer ---
+fastapi>=0.110
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+soundfile>=0.12       # wav / flac / ogg encoding
+pydub>=0.25           # mp3 / opus encoding (needs ffmpeg on PATH)
+
+# NOTE: voice cloning / saving new presets additionally needs a codec that can
+# *encode* audio (the default ONNX decoder is decode-only). For that, install the
+# full PyTorch codec: `pip install vieneu[gpu]` and set TTS_CODEC to a torch
+# codec. Without it the sidecar serves the built-in preset voices only.
