@@ -29,6 +29,9 @@ project's evidence-first policy. No benchmark numbers have been invented.
 | 18 | Local testing UI (Gradio) — usage + sample collection | [18-testing-ui.md](18-testing-ui.md) |
 | 19 | Microphone pipeline — diagnosis report (root causes, no fixes) | [19-mic-diagnosis.md](19-mic-diagnosis.md) |
 | 20 | Microphone pipeline — fixes applied (gain-norm, ASR worker, race, WAV) | [20-mic-fixes.md](20-mic-fixes.md) |
+| 21 | Consecutive mic sessions fail — diagnosis (no fix) | [21-mic-consecutive-sessions.md](21-mic-consecutive-sessions.md) |
+| 22 | Consecutive mic sessions — armed-session routing fix (**REVERTED, see doc 23**) | [22-mic-consecutive-sessions-fix.md](22-mic-consecutive-sessions-fix.md) |
+| 23 | Mic — revert doc-22, instrument, re-diagnose (finalize/start overlap) | [23-mic-revert-and-instrumentation.md](23-mic-revert-and-instrumentation.md) |
 
 ## Evidence labels used throughout
 

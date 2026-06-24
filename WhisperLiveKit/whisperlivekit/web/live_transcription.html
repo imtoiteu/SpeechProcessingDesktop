@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WhisperLiveKit</title>
+    <link rel="stylesheet" href="live_transcription.css" />
+</head>
+
+<body>
+    <div class="header-container">
+        <div class="settings-container">
+            <div class="buttons-container">
+                <button id="recordButton">
+                    <div class="shape-container">
+                        <div class="shape"></div>
+                    </div>
+                    <div class="recording-info">
+                        <div class="wave-container">
+                            <canvas id="waveCanvas"></canvas>
+                        </div>
+                        <div class="timer">00:00</div>
+                    </div>
+                </button>
+
+                <button id="settingsToggle" class="settings-toggle" title="Show/hide settings">
+                    <img src="web/src/settings.svg" alt="Settings" />
+                </button>
+
+                <label for="fileInput" id="fileButton" class="file-button" title="Transcribe an audio or video file">Choose file</label>
+                <input id="fileInput" type="file" accept="audio/*,video/*" hidden />
+
+                <div class="segmented mode-segmented" role="radiogroup" aria-label="File transcription mode">
+                    <input type="radio" id="mode-stream" name="mode" value="stream" checked />
+                    <label for="mode-stream" title="Transcript appears progressively while processing">Streaming</label>
+                    <input type="radio" id="mode-batch" name="mode" value="batch" />
+                    <label for="mode-batch" title="Full transcript returned after processing completes">Batch</label>
+                </div>
+
+                <select id="languageSelect" class="control-select" title="Transcription language" aria-label="Transcription language"></select>
+                <select id="modelSelect" class="control-select" title="ASR model — restart the server to change" aria-label="ASR model"></select>
+                <button id="startBtn" type="button" class="start-button" disabled title="Start transcribing the selected file">Start Transcription</button>
+            </div>
+
+            <div class="settings">
+                <div class="field">
+                    <label for="websocketInput">Websocket URL</label>
+                    <input id="websocketInput" type="text" placeholder="ws://host:port/asr" />
+                </div>
+
+                <div class="field">
+                    <label id="microphoneSelectLabel" for="microphoneSelect">Select Microphone</label>
+                    <select id="microphoneSelect">
+                        <option value="">Default Microphone</option>
+                    </select>
+                </div>
+
+                <div class="theme-selector-container">
+                    <div class="segmented" role="radiogroup" aria-label="Theme selector">
+                        <input type="radio" id="theme-system" name="theme" value="system" />
+                        <label for="theme-system" title="System">
+                            <img src="/web/src/system_mode.svg" alt="" />
+                            <span>System</span>
+                        </label>
+
+                        <input type="radio" id="theme-light" name="theme" value="light" />
+                        <label for="theme-light" title="Light">
+                            <img src="/web/src/light_mode.svg" alt="" />
+                            <span>Light</span>
+                        </label>
+
+                        <input type="radio" id="theme-dark" name="theme" value="dark" />
+                        <label for="theme-dark" title="Dark">
+                            <img src="/web/src/dark_mode.svg" alt="" />
+                            <span>Dark</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <p id="status"></p>
+    </div>
+
+    <div id="mediaContainer" class="media-container hidden">
+        <video id="mediaPlayer" controls playsinline></video>
+        <div id="mediaFileName" class="media-filename"></div>
+    </div>
+
+    <div class="transcript-container">
+        <div class="transcript-toolbar">
+            <button id="copyBtn" type="button" title="Copy transcript to clipboard">Copy</button>
+            <button id="exportBtn" type="button" title="Download transcript as .txt">Export .txt</button>
+            <button id="clearBtn" type="button" title="Clear the transcript">Clear</button>
+            <label class="ts-toggle"><input type="checkbox" id="showTimestamps" checked /> Timestamps</label>
+        </div>
+        <div id="linesTranscript"></div>
+    </div>
+
+    <script src="live_transcription.js"></script>
+</body>
+
+</html>

@@ -46,3 +46,8 @@ Thumbs.db
 # --- Claude ---
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# --- Vendored research clones (evaluation only; not part of this project) ---
+faster-whisper/
+WhisperLive/
+whisper_streaming/

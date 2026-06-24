@@ -31,11 +31,23 @@ def test_build_ui_constructs():
     assert demo is not None
 
 
-@pytest.mark.skipif(not os.path.isfile(GGML), reason="GGML weights not downloaded")
+@pytest.fixture(autouse=True)
+def _reset_mic_state():
+    # Finish any worker a test left open so threads don't leak between tests.
+    yield
+    for s in list(ui._MIC_SESSIONS.values()):
+        if not s.stopped:
+            try:
+                s.finish()
+            except Exception:
+                pass
+    ui._MIC_SESSIONS.clear()
+
+
 def test_empty_chunk_is_safe():
+    # No session id + no chunk -> no capture, no crash, no model load.
     sid, final, partial = ui.mic_stream(None, None, "whisper.cpp", "vi")
     assert (final, partial) == ("", "")
-    ui.mic_clear(sid)  # stop the worker thread
 
 
 @pytest.mark.skipif(not os.path.isfile(GGML), reason="GGML weights not downloaded")
@@ -79,10 +91,46 @@ def test_mic_session_background_worker_flow(tmp_path):
 
 
 @pytest.mark.skipif(not os.path.isfile(GGML), reason="GGML weights not downloaded")
-def test_mic_start_reuses_racing_session_no_onset_loss():
-    # RC-3: a stream chunk that arrives before start_recording opens session A; the
-    # subsequent mic_start must REUSE A (not orphan it), so the first chunk survives.
-    sidA, _, _ = ui.mic_stream(None, None, "whisper.cpp", "vi")   # stream raced ahead
-    sidB, _, _ = ui.mic_start(sidA, "whisper.cpp", "vi")          # Record pressed after
-    assert sidB == sidA                                          # same session reused
-    ui.mic_clear(sidB)
+def test_mic_start_reuses_racing_session_no_onset_loss(tmp_path):
+    # doc-20 RC-3 baseline: a stream chunk that arrives BEFORE start_recording lazily
+    # opens a session; mic_start must then REUSE that same session (same id), so the
+    # onset chunk is not orphaned by a second, replacement session.
+    from vnstt.audio import decode_audio
+
+    y = decode_audio(os.path.join(FIX, "multi.wav"))
+    chunk = (SAMPLE_RATE, y[: int(0.5 * SAMPLE_RATE)])
+    sid_race, _, _ = ui.mic_stream(chunk, None, "whisper.cpp", "vi")   # stream first (race)
+    assert sid_race is not None
+    sid_start, _, _ = ui.mic_start(sid_race, "whisper.cpp", "vi")      # Record after
+    assert sid_start == sid_race                                       # reused, not replaced
+    ui._MIC_SESSIONS[sid_race]._q.join()
+    assert sum(a.size for a in ui._MIC_SESSIONS[sid_race]._audio) > 0  # onset chunk kept
+
+
+@pytest.mark.skipif(not os.path.isfile(GGML), reason="GGML weights not downloaded")
+def test_consecutive_sessions_normal_order_capture_full_audio(tmp_path):
+    # Baseline sanity (doc 21 finding #2): in strict start->stream->stop order, two
+    # back-to-back sessions each capture the full audio. (The reported real-world
+    # failure occurs only under the event RACE that this serial harness cannot create —
+    # which is exactly why we now instrument for live browser logs, see doc 23.)
+    from vnstt.audio import decode_audio
+
+    y = decode_audio(os.path.join(FIX, "multi.wav"))
+    step = int(0.5 * SAMPLE_RATE)
+    chunks = [(SAMPLE_RATE, y[i : i + step]) for i in range(0, y.size, step)]
+    full_s = y.size / SAMPLE_RATE
+
+    def run_session(prev_sid):
+        sid, _, _ = ui.mic_start(prev_sid, "whisper.cpp", "vi")
+        for c in chunks:
+            sid, _, _ = ui.mic_stream(c, sid, "whisper.cpp", "vi")
+        sid, final, _, _ = ui.mic_stop(sid, "whisper.cpp", "vi")
+        ui._MIC_SESSIONS[sid]._q.join()
+        captured = sum(a.size for a in ui._MIC_SESSIONS[sid]._audio) / SAMPLE_RATE
+        return sid, final, captured
+
+    sid1, final1, cap1 = run_session(None)
+    sid2, final2, cap2 = run_session(sid1)
+    assert sid2 != sid1
+    assert "xin" in final1.lower().split() and "xin" in final2.lower().split()
+    assert cap1 > 0.8 * full_s and cap2 > 0.8 * full_s
