@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
@@ -88,9 +89,15 @@ async def websocket_endpoint(websocket: WebSocket):
         language=session_language,
     )
     await websocket.accept()
+    # Log which streaming backend/model serves this session (once, on open) so the
+    # operator can confirm the live pipeline without enabling per-frame logging.
+    _eng_cfg = getattr(transcription_engine, "config", None)
     logger.info(
-        "WebSocket connection opened.%s",
-        f" language={session_language}" if session_language else "",
+        "Streaming /asr session opened — backend=%s model=%s language=%s mode=%s",
+        getattr(_eng_cfg, "backend", None),
+        getattr(_eng_cfg, "model_size", None),
+        session_language or "auto",
+        mode,
     )
     diff_tracker = None
     if mode == "diff":
@@ -316,8 +323,35 @@ async def create_transcription(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Empty audio file")
 
+    requested_model = (model or "").strip() or "(default)"
+    logger.info(
+        "Batch transcription request received — requested_model=%r language=%s "
+        "response_format=%s size=%d bytes",
+        requested_model, language or "auto", response_format, len(audio_bytes),
+    )
+
+    # get_batch_backend() logs the routing decision (chunkformer / mlx-whisper /
+    # fallback). We log the resolved backend id here and time the run.
     backend = get_batch_backend(model, transcription_engine)
-    result = await backend.transcribe(audio_bytes, language, response_format)
+    logger.info(
+        "Batch backend selected — id=%s%s",
+        backend.id,
+        " [ChunkFormer Vietnamese]" if backend.id == "chunkformer" else "",
+    )
+
+    started = time.monotonic()
+    try:
+        result = await backend.transcribe(audio_bytes, language, response_format)
+    except Exception:
+        logger.exception(
+            "Batch transcription FAILED after %.2fs (requested_model=%r backend=%s)",
+            time.monotonic() - started, requested_model, backend.id,
+        )
+        raise
+    logger.info(
+        "Batch transcription finished — backend=%s elapsed=%.2fs",
+        backend.id, time.monotonic() - started,
+    )
 
     if isinstance(result, str):
         return PlainTextResponse(result)
@@ -348,6 +382,15 @@ def main():
 
     ssl = bool(config.ssl_certfile and config.ssl_keyfile)
     print_banner(config, config.host, config.port, ssl=ssl)
+
+    # The desktop status bar polls GET /health every few seconds, which otherwise
+    # floods the uvicorn access log with `GET /health 200 OK`. Drop just those
+    # access-log lines — real requests and errors are still logged normally.
+    class _HealthAccessFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "/health" not in record.getMessage()
+
+    logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
 
     uvicorn_kwargs = {
         "app": "whisperlivekit.basic_server:app",

@@ -61,4 +61,9 @@ fi
 
 # `tts` package lives under src/; `vieneu`/`vieneu_utils` are installed in the venv.
 export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+TTS_PORT="${TTS_PORT:-8011}"
+echo "Starting VieNeu-TTS sidecar (interpreter: $PY)"
+echo "  TTS API: http://localhost:${TTS_PORT}"
+echo "  Health:  http://localhost:${TTS_PORT}/tts/health"
 exec "$PY" -m tts.server

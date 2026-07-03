@@ -365,7 +365,9 @@
         } else {
           await applyConfig();
         }
-        setInterval(poll, 1500);
+        // Poll the STT/TTS status badges every 4s — responsive enough for the
+        // status bar without flooding the servers' /health access logs.
+        setInterval(poll, 4000);
         poll();
       })();
     </script>

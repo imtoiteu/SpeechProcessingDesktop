@@ -41,10 +41,44 @@ Browser — STTLive web UI (http://localhost:8000)
 The STT and TTS subsystems share **no code, process, or venv** — TTS is an optional
 add-on and the streaming hot path is never touched by it.
 
-## Setup
+## Quick start (macOS Apple Silicon, clean clone)
+
+The reproducible, scripted path — no dependence on old local venvs or folders. See
+[`docs/SETUP.md`](docs/SETUP.md) for the full reference.
+
+```bash
+git clone https://github.com/imtoiteu/SpeechProcessingDesktop.git
+cd SpeechProcessingDesktop
+./scripts/bootstrap_macos.sh        # STT venv + TTS venv + desktop deps (no heavy models)
+./scripts/build_desktop_macos.sh    # build STTLive.app
+./scripts/open_desktop_macos.sh     # launch it
+```
+
+**Daily use:** `./scripts/open_desktop_macos.sh`
+
+**Manual / debug (run servers directly, no app):**
+
+```bash
+./scripts/run_web_macos.sh      # STT web UI + API   → http://localhost:8000
+./scripts/run_stt_server.sh     # same STT server (streaming + batch)
+./scripts/run_tts_server.sh     # TTS sidecar        → http://localhost:8011
+```
+
+**Optional add-ons:** `./scripts/bootstrap_macos.sh --warm-tts` (prefetch TTS model),
+`./scripts/setup_chunkformer.sh` (enable Batch + ChunkFormer Vietnamese),
+`./scripts/diagnose_env.sh` (environment report).
+
+The two standardized environments are the **root `.venv`** (STT →
+`.venv/bin/whisperlivekit-server`) and **`VieNeu-TTS/.venv`** (TTS →
+`VieNeu-TTS/.venv/bin/vieneu-stream`). `.venv-chunkformer` is an optional third venv
+used *only* by the ChunkFormer batch model; `.venv-stage0` / `.venv-tts` are legacy and
+not used by any current feature.
+
+## Setup (manual reference)
 
 Requires **Python 3.12** (ASR/TTS runtimes lag newer releases), `ffmpeg`, and
-[`uv`](https://docs.astral.sh/uv/). Apple Silicon recommended (MLX).
+[`uv`](https://docs.astral.sh/uv/). Apple Silicon recommended (MLX). The
+`bootstrap_macos.sh` script above runs all of the following for you.
 
 ### 1. STT server (required)
 

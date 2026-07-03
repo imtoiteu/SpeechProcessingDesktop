@@ -10,10 +10,14 @@
 #   ./scripts/run_stt_server.sh
 #
 # Environment (all optional):
-#   STT_PYTHON=/path/to/python   # run `python -m whisperlivekit.basic_server` instead
-#   STT_MODEL=large-v3-turbo     STT_BACKEND=mlx-whisper
-#   STT_BACKEND_POLICY=simulstreaming
-#   STT_LANGUAGE=auto            STT_HOST=localhost   STT_PORT=8000
+#   STTLIVE_STT_MODEL=large-v3-turbo   STTLIVE_STT_LANGUAGE=auto
+#   STTLIVE_STT_HOST=localhost         STTLIVE_STT_PORT=8000
+#   STT_PYTHON=/path/to/python         # run `python -m whisperlivekit.basic_server` instead
+#   STT_BACKEND=mlx-whisper            STT_BACKEND_POLICY=simulstreaming
+#
+# The STTLIVE_STT_* names are the documented public knobs; the older STT_* names
+# still work as fallbacks so nothing that already set them breaks. Defaults
+# preserve the exact working macOS Apple Silicon command.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,14 +40,19 @@ else
   exit 1
 fi
 
-MODEL="${STT_MODEL:-large-v3-turbo}"
+# STTLIVE_STT_* is the documented name; STT_* is the legacy fallback; then default.
+MODEL="${STTLIVE_STT_MODEL:-${STT_MODEL:-large-v3-turbo}}"
 BACKEND="${STT_BACKEND:-mlx-whisper}"
 POLICY="${STT_BACKEND_POLICY:-simulstreaming}"
-LANG="${STT_LANGUAGE:-auto}"
-HOST="${STT_HOST:-localhost}"
-PORT="${STT_PORT:-8000}"
+LANG="${STTLIVE_STT_LANGUAGE:-${STT_LANGUAGE:-auto}}"
+HOST="${STTLIVE_STT_HOST:-${STT_HOST:-localhost}}"
+PORT="${STTLIVE_STT_PORT:-${STT_PORT:-8000}}"
 
-echo "Starting WhisperLiveKit STT on ${HOST}:${PORT} (model=${MODEL}, backend=${BACKEND})"
+echo "Starting WhisperLiveKit STT"
+echo "  Web UI:    http://${HOST}:${PORT}"
+echo "  WebSocket: ws://${HOST}:${PORT}/asr"
+echo "  Health:    http://${HOST}:${PORT}/health"
+echo "  Command:   ${SERVER[*]} --model ${MODEL} --backend ${BACKEND} --backend-policy ${POLICY} --language ${LANG} --host ${HOST} --port ${PORT}"
 exec "${SERVER[@]}" \
   --model "$MODEL" \
   --backend "$BACKEND" \

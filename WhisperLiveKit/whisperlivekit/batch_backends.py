@@ -500,9 +500,22 @@ def get_batch_backend(model: str, transcription_engine) -> BatchBackend:
     """
     name = (model or "").strip().lower()
     if "chunkformer" in name:
+        logger.info("Batch routing: ChunkFormer selected (requested_model=%r)", model)
         return ChunkFormerBatchBackend()
-    if name in WHISPER_BATCH_MODELS and MlxWhisperBatchBackend.available():
-        return MlxWhisperBatchBackend(name)
+    if name in WHISPER_BATCH_MODELS:
+        if MlxWhisperBatchBackend.available():
+            logger.info("Batch routing: mlx-whisper selected (model=%s)", name)
+            return MlxWhisperBatchBackend(name)
+        logger.info(
+            "Batch routing: FALLBACK to in-process Whisper singleton — requested "
+            "'%s' but mlx-whisper is unavailable on this host (not Apple Silicon or "
+            "mlx_whisper not installed).", name,
+        )
+        return WhisperBatchBackend(transcription_engine)
+    logger.info(
+        "Batch routing: in-process Whisper singleton (requested_model=%r -> default)",
+        model,
+    )
     return WhisperBatchBackend(transcription_engine)
 
 

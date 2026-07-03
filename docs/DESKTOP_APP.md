@@ -180,6 +180,14 @@ The OS-standard app config directory (Tauri `config_dir()` API), **not** in the 
 mode; this per-user config governs **URLs, mode, and auto-start** and overrides the
 hardcoded localhost assumptions.
 
+**Reset the config** (next launch shows the first-run setup again):
+
+```bash
+rm "$HOME/Library/Application Support/STTLive/config.json"   # macOS
+rm "$HOME/.config/STTLive/config.json"                        # Linux
+Remove-Item "$env:APPDATA\STTLive\config.json"                # Windows (PowerShell)
+```
+
 ### Microphone / WebSocket limits in Remote Mode
 
 - **Live microphone** needs a *secure context*. A remote **`http://` origin is not
@@ -202,6 +210,18 @@ The desktop app is **Mac-only** to build and run. On the Mac you need:
 - Tauri's macOS system webview (WKWebView) ships with macOS — nothing to install.
 
 ## Install & run
+
+The reproducible path is the standardized scripts (they wrap the `npm` commands below
+and set up the STT/TTS venvs first). See [`SETUP.md`](SETUP.md) for the full reference.
+
+```bash
+./scripts/bootstrap_macos.sh        # STT venv + TTS venv + desktop deps + icons
+./scripts/build_desktop_macos.sh    # → desktop/src-tauri/target/release/bundle/macos/STTLive.app
+./scripts/open_desktop_macos.sh     # launch the built app
+./scripts/dev_desktop_macos.sh      # or: hot-reload dev mode
+```
+
+Equivalent raw commands (what the scripts run under the hood):
 
 ```bash
 cd desktop

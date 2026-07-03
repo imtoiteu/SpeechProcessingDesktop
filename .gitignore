@@ -14,6 +14,7 @@ htmlcov/
 
 # --- Virtual environments ---
 .venv/
+**/.venv/
 .venv-stage0/
 .venv-tts/
 .venv-chunkformer/
@@ -24,6 +25,10 @@ ENV/
 # --- Models & large/regenerable artifacts ---
 # Model weights are large (multi-GB) and downloaded separately; do not commit.
 models/
+model/
+checkpoints/
+hf-cache/
+**/hf-cache/
 stage0/hf-cache/
 stage0/results/
 *.bin
@@ -52,6 +57,7 @@ logs/
 
 # --- Desktop app (Tauri) build output ---
 node_modules/
+**/node_modules/
 desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/
