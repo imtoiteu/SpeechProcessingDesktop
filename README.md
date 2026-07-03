@@ -117,6 +117,23 @@ npm run dev     # dev mode (needs .venv STT already set up — see Setup)
 npm run build   # produce a .app / .dmg
 ```
 
+### Run & build per platform
+
+One-time per machine: install **Rust** (rustup) + **Node 18+**, set up the STT/TTS
+venvs (see Setup and the per-OS backend notes in `docs/DESKTOP_APP.md`), then
+`cd desktop && npm install`. Before your first packaging build, run `npm run icon`.
+
+| OS | Extra prerequisites | Dev | Build | Installer output |
+|---|---|---|---|---|
+| **macOS** (Apple Silicon) — *tested* | Xcode CLT (`xcode-select --install`) | `npm run dev` | `npm run build` | `.app` + `.dmg` |
+| **Windows** — *prepared, pending validation* | MSVC C++ Build Tools · WebView2 runtime | `npm run dev` | `npm run build` | `.exe` (NSIS) + `.msi` |
+| **Linux** — *prepared, pending validation* | `libwebkit2gtk-4.1-dev` + build deps | `npm run dev` | `npm run build` | AppImage + `.deb` + `.rpm` |
+
+Each installer is produced **only on its own OS** (Tauri does not cross-compile). All
+bundles land in `desktop/src-tauri/target/release/bundle/`. Which backend command each
+OS runs (mlx-whisper on macOS, faster-whisper on Windows/Linux, etc.) is defined in the
+OS-aware map below — no recompile needed to change it.
+
 Platform commands are read from an OS-aware map, [`scripts/launch.config.json`](scripts/launch.config.json),
 so backends can change without recompiling. **macOS Apple Silicon is the primary,
 tested runtime.** Windows and Linux are **structurally prepared** — a Tauri shell plus

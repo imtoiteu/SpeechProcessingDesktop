@@ -4,6 +4,33 @@ A **native desktop launcher/wrapper** (Tauri v2) around the existing STTLive sta
 It changes nothing about how STT or TTS work — it only *supervises* them and shows
 the existing web UI inside an app window.
 
+## What was added (scope of this work)
+
+The desktop layer was added **without touching the STT/TTS engines or the web UI**.
+Deleting `desktop/` and the new `scripts/*` reverts to the exact web-only setup.
+
+- **`desktop/`** — a self-contained Tauri v2 app: a Rust supervisor
+  (`src-tauri/src/main.rs`) that health-checks STT (`:8000/health`) and TTS
+  (`:8011/tts/health`), starts each server only if it isn't already up, embeds the
+  existing `:8000` UI in an iframe (`ui/index.html`), and on exit stops **only** the
+  processes it started (never an externally-launched server).
+- **`scripts/launch.config.json`** — an OS-aware command map (macOS/Windows/Linux → how
+  to start STT and TTS). The launcher reads it at startup, so backend commands change
+  without recompiling; a built-in fallback keeps it working if the file is absent.
+- **Per-OS sidecar scripts** — `run_stt_server.sh`/`run_tts_server.sh` (macOS),
+  `run_stt_linux.sh`/`run_tts_linux.sh` (Linux), `run_stt_windows.ps1`/
+  `run_tts_windows.ps1` (Windows). macOS keeps the original `mlx-whisper` + Metal
+  commands; Windows/Linux use the cross-platform `faster-whisper` STT backend and
+  CPU/CUDA `llama-cpp-python` for TTS.
+- **`tauri.conf.json`** — `bundle.targets: "all"`, so each OS produces its native
+  installers (macOS `.app`/`.dmg`, Windows NSIS `.exe`/`.msi`, Linux AppImage/`.deb`/`.rpm`).
+- **Docs** — this file (per-OS prerequisites, run/build, limitations, test checklists)
+  plus a README quick-reference.
+
+> **Runtime status:** macOS Apple Silicon is the primary, tested runtime. Windows and
+> Linux are **structurally prepared but pending validation on real hardware** — nothing
+> about them was faked or claimed as tested. See the Windows/Linux sections below.
+
 ## What it does
 
 1. Locates the repo (via `STTLIVE_REPO`, the working directory, or the executable path).
