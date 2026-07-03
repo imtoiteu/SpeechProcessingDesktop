@@ -1148,20 +1148,86 @@ function pcm16ToWavBlob(chunks, sampleRate) {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
+// Encode a decoded AudioBuffer (any sample rate / channel count) as a 16-bit PCM
+// WAV blob. WAV is universally playable AND seekable from a blob: URL, unlike the
+// fragmented MP4/WebM that MediaRecorder emits (which Safari/WKWebView often
+// refuses to replay) — so we normalise mic recordings to WAV for playback.
+function audioBufferToWavBlob(audioBuffer) {
+  const numCh = audioBuffer.numberOfChannels || 1;
+  const sampleRate = audioBuffer.sampleRate;
+  const numFrames = audioBuffer.length;
+  const blockAlign = numCh * 2;
+  const dataSize = numFrames * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);              // PCM
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  const channels = [];
+  for (let ch = 0; ch < numCh; ch++) channels.push(audioBuffer.getChannelData(ch));
+  let offset = 44;
+  for (let i = 0; i < numFrames; i++) {
+    for (let ch = 0; ch < numCh; ch++) {
+      let s = Math.max(-1, Math.min(1, channels[ch][i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 // Build a playable asset from the just-finished recording and make it the
 // active source, so replay + timestamp seeking target the mic audio (not a
 // previously uploaded file).
-function finalizeMicAsset() {
+//
+// - PCM/worklet transport (--pcm-input): already raw PCM -> wrap directly as WAV.
+// - MediaRecorder transport (default): the container blob (fMP4 on Safari, WebM on
+//   Chromium) frequently will NOT replay from a blob: URL in a WKWebView, so decode
+//   it and re-encode to WAV. Fall back to the raw blob only if decoding fails.
+async function finalizeMicAsset() {
   if (!micRecordedParts.length) return;
-  let blob = null;
+
   if (micRecordedKind === "wav") {
-    blob = pcm16ToWavBlob(micRecordedParts, 16000);
-  } else {
-    blob = new Blob(micRecordedParts, { type: micRecordedMime || "audio/webm" });
+    const blob = pcm16ToWavBlob(micRecordedParts, 16000);
+    micRecordedParts = [];
+    if (blob && blob.size > 0) {
+      setActiveMedia(URL.createObjectURL(blob), "Microphone recording", "mic", "audio");
+    }
+    return;
   }
+
+  const container = new Blob(micRecordedParts, { type: micRecordedMime || "audio/webm" });
   micRecordedParts = [];
-  if (blob && blob.size > 0) {
-    setActiveMedia(URL.createObjectURL(blob), "Microphone recording", "mic", "audio");
+  if (!container.size) return;
+
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const bytes = await container.arrayBuffer();
+    const decodeCtx = new AC();
+    // Safari's decodeAudioData resolves a promise; wrap the callback form too.
+    const audioBuffer = await new Promise((resolve, reject) => {
+      const p = decodeCtx.decodeAudioData(bytes, resolve, reject);
+      if (p && typeof p.then === "function") p.then(resolve, reject);
+    });
+    try { await decodeCtx.close(); } catch (e) {}
+    const wav = audioBufferToWavBlob(audioBuffer);
+    setActiveMedia(URL.createObjectURL(wav), "Microphone recording", "mic", "audio");
+  } catch (e) {
+    console.warn("Mic re-encode to WAV failed; using the raw recording blob.", e);
+    if (container.size > 0) {
+      setActiveMedia(URL.createObjectURL(container), "Microphone recording", "mic", "audio");
+    }
   }
 }
 
