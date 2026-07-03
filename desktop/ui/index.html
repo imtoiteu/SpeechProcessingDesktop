@@ -32,6 +32,10 @@
         border: none; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
       button:disabled { opacity: .5; cursor: default; }
       button.ghost { background: transparent; border: 1px solid #2a3a5c; color: var(--muted); }
+      /* Keep the Settings entry point clearly visible (not muted) — it is always
+         available to re-open the Connection settings after startup. */
+      #settings-btn { color: var(--fg); background: #0e1626; border-color: #3a4a6c; font-weight: 600; }
+      #settings-btn:hover { border-color: var(--accent); }
       #stage { position: relative; flex: 1; }
       iframe { border: 0; width: 100%; height: 100%; background: #fff; }
       #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -80,7 +84,7 @@
         <span id="mode-badge" class="badge" style="display:none"></span>
         <div class="spacer"></div>
         <button id="tts-btn">Start Text-to-Speech</button>
-        <button id="settings-btn" class="ghost" title="Connection settings">Settings</button>
+        <button id="settings-btn" class="ghost" title="Edit connection settings (mode, STT/TTS URLs, auto-start, timeout)">⚙ Settings</button>
         <button id="reload-btn" class="ghost" title="Reload the STT UI">Reload</button>
       </div>
       <div id="stage">
