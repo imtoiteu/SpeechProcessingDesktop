@@ -34,6 +34,14 @@ row ".venv/bin/whisperlivekit-server" "$(xyn .venv/bin/whisperlivekit-server)"
 if [[ -x .venv/bin/python ]]; then
   row "  import mlx_whisper" "$(.venv/bin/python -c 'import mlx_whisper' 2>/dev/null && echo ok || echo NO)"
 fi
+# Required Silero VAD ONNX asset (committed; STT fails to start without it).
+VAD="WhisperLiveKit/whisperlivekit/silero_vad_models/silero_vad.onnx"
+if [[ -f "$VAD" ]]; then
+  VAD_SZ="$(stat -f%z "$VAD" 2>/dev/null || stat -c%s "$VAD" 2>/dev/null || echo 0)"
+  if [[ "$VAD_SZ" -ge 1000000 ]]; then row "silero_vad.onnx (required)" "yes (${VAD_SZ} bytes)"; else row "silero_vad.onnx (required)" "PRESENT BUT TOO SMALL (${VAD_SZ} bytes) — corrupt?"; fi
+else
+  row "silero_vad.onnx (required)" "NO — STT will fail to start; run ./scripts/bootstrap_macos.sh"
+fi
 
 hdr "TTS environment (VieNeu-TTS/.venv)"
 row "VieNeu-TTS/.venv exists"       "$(yn VieNeu-TTS/.venv)"

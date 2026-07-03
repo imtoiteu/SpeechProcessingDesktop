@@ -33,6 +33,10 @@ say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33mWARNING: %s\033[0m\n' "$*" >&2; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Provides ensure_vad_onnx() — restores the Silero VAD ONNX if it is ever missing.
+# shellcheck source=scripts/_ensure_vad.sh
+source "$REPO_ROOT/scripts/_ensure_vad.sh"
+
 # --- 0. OS + prerequisite checks ------------------------------------------
 say "Checking prerequisites"
 [[ "$(uname -s)" == "Darwin" ]] || die "This script is for macOS. On Linux use scripts/bootstrap_linux.sh."
@@ -53,6 +57,10 @@ uv pip install --python .venv mlx-whisper
 [[ -x ".venv/bin/whisperlivekit-server" ]] \
   || die "Expected .venv/bin/whisperlivekit-server after install — STT setup failed."
 echo "OK: .venv/bin/whisperlivekit-server"
+
+# The Silero VAD ONNX asset is committed to the repo, so a clean clone already has
+# it. This restore is a safety net for the case where it is somehow missing.
+ensure_vad_onnx || die "Silero VAD ONNX asset is missing and could not be restored."
 
 # --- 2. VieNeu-TTS venv ----------------------------------------------------
 say "Setting up VieNeu-TTS venv (VieNeu-TTS/.venv)"

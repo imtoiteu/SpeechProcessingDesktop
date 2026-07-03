@@ -40,6 +40,19 @@ else
   exit 1
 fi
 
+# Preflight the required Silero VAD ONNX asset. It ships committed in the repo; if
+# it is somehow missing, _ensure_vad.sh restores it so STT does not die at startup
+# with a cryptic "Model file not found: silero_vad.onnx".
+# shellcheck source=scripts/_ensure_vad.sh
+source "$REPO_ROOT/scripts/_ensure_vad.sh"
+if ! ensure_vad_onnx; then
+  echo "ERROR: required Silero VAD asset missing:" >&2
+  echo "  $(vad_onnx_path)" >&2
+  echo "  STT cannot start without it. Run ./scripts/bootstrap_macos.sh, or copy" >&2
+  echo "  silero_vad.onnx into WhisperLiveKit/whisperlivekit/silero_vad_models/." >&2
+  exit 1
+fi
+
 # STTLIVE_STT_* is the documented name; STT_* is the legacy fallback; then default.
 MODEL="${STTLIVE_STT_MODEL:-${STT_MODEL:-large-v3-turbo}}"
 BACKEND="${STT_BACKEND:-mlx-whisper}"

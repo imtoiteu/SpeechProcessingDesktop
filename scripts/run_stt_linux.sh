@@ -42,6 +42,16 @@ else
   exit 1
 fi
 
+# Preflight the required Silero VAD ONNX asset (committed in the repo; restored if
+# missing) so STT does not die at startup with "Model file not found: silero_vad.onnx".
+# shellcheck source=scripts/_ensure_vad.sh
+source "$REPO_ROOT/scripts/_ensure_vad.sh"
+if ! ensure_vad_onnx; then
+  echo "ERROR: required Silero VAD asset missing: $(vad_onnx_path)" >&2
+  echo "  Copy silero_vad.onnx into WhisperLiveKit/whisperlivekit/silero_vad_models/." >&2
+  exit 1
+fi
+
 MODEL="${STT_MODEL:-large-v3-turbo}"
 BACKEND="${STT_BACKEND:-faster-whisper}"
 POLICY="${STT_BACKEND_POLICY:-simulstreaming}"

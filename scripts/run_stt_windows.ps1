@@ -43,6 +43,23 @@ whisperlivekit-server not found. Set up the STT venv (Windows):
     exit 1
 }
 
+# Preflight the required Silero VAD ONNX asset (committed in the repo; restored from
+# the pinned upstream tag if missing) so STT doesn't die with "Model file not found".
+$VadOnnx = Join-Path $RepoRoot "WhisperLiveKit\whisperlivekit\silero_vad_models\silero_vad.onnx"
+if (-not ((Test-Path $VadOnnx) -and ((Get-Item $VadOnnx).Length -ge 1000000))) {
+    Write-Host "Silero VAD ONNX missing at $VadOnnx — attempting restore..."
+    $VadUrl = "https://raw.githubusercontent.com/QuentinFuxa/WhisperLiveKit/v0.2.22/whisperlivekit/silero_vad_models/silero_vad.onnx"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $VadOnnx) | Out-Null
+    try {
+        Invoke-WebRequest -Uri $VadUrl -OutFile $VadOnnx -UseBasicParsing -TimeoutSec 60
+    } catch { }
+    if (-not ((Test-Path $VadOnnx) -and ((Get-Item $VadOnnx).Length -ge 1000000))) {
+        Write-Error "Required Silero VAD asset missing: $VadOnnx`nCopy silero_vad.onnx into WhisperLiveKit\whisperlivekit\silero_vad_models\."
+        exit 1
+    }
+    Write-Host "Restored Silero VAD ONNX -> $VadOnnx"
+}
+
 $Model   = if ($env:STT_MODEL)          { $env:STT_MODEL }          else { "large-v3-turbo" }
 $Backend = if ($env:STT_BACKEND)        { $env:STT_BACKEND }        else { "faster-whisper" }
 $Policy  = if ($env:STT_BACKEND_POLICY) { $env:STT_BACKEND_POLICY } else { "simulstreaming" }

@@ -197,5 +197,14 @@ WebView2 runtime. See [`DESKTOP_APP.md`](DESKTOP_APP.md) for the full prerequisi
 
 Prints OS/arch, Python/uv/ffmpeg/node/cargo versions, whether each venv and its key
 executable exist, whether the TTS-critical imports (`vieneu`, `llama_cpp`, `trafilatura`)
-resolve, desktop config presence, and the config-file path — so you never confuse a
-current venv with an old one.
+resolve, whether the required Silero VAD asset is present, desktop config presence, and
+the config-file path — so you never confuse a current venv with an old one.
+
+### Required runtime asset: Silero VAD
+
+STT loads `WhisperLiveKit/whisperlivekit/silero_vad_models/silero_vad.onnx` (~2.3 MB,
+opset-16) at startup. It ships **committed** in the repo (a `.gitignore` exception to the
+general `*.onnx` rule), so a clean clone already has it. If it is ever missing,
+`bootstrap_macos.sh` and `run_stt_server.sh` restore it automatically from the pinned
+upstream WhisperLiveKit tag before STT starts, and `run_stt_server.sh` fails with a clear
+message if the restore can't complete.

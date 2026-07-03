@@ -40,6 +40,12 @@ stage0/results/
 *.safetensors
 .cache/
 
+# EXCEPTION: the Silero VAD ONNX is a small (~2.3 MB) REQUIRED runtime asset that
+# ships with the vendored WhisperLiveKit source (opset-16, loaded at STT startup).
+# It is not a downloadable model weight, so it must be committed despite *.onnx above.
+!WhisperLiveKit/whisperlivekit/silero_vad_models/
+!WhisperLiveKit/whisperlivekit/silero_vad_models/silero_vad.onnx
+
 # --- Audio / generated media (regenerable; keep out of git) ---
 *.mp3
 *.wav
