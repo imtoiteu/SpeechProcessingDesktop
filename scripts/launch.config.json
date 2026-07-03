@@ -1,0 +1,15 @@
+{
+  "_comment": "OS-aware sidecar launch mapping for the STTLive desktop app. The desktop launcher (desktop/src-tauri/src/main.rs) reads this at startup to decide HOW to start the STT and TTS servers on the current platform. This keeps every platform-specific command in ONE editable place instead of scattered through Rust code. Relative program/args paths are resolved against the repo root. You can change a backend command here WITHOUT recompiling the desktop app. Override this file's location with the STTLIVE_LAUNCH_CONFIG env var. If this file is missing or malformed, the launcher falls back to built-in defaults identical to the values below.",
+  "macos": {
+    "stt": { "program": "bash", "args": ["scripts/run_stt_server.sh"] },
+    "tts": { "program": "bash", "args": ["scripts/run_tts_server.sh"] }
+  },
+  "linux": {
+    "stt": { "program": "bash", "args": ["scripts/run_stt_linux.sh"] },
+    "tts": { "program": "bash", "args": ["scripts/run_tts_linux.sh"] }
+  },
+  "windows": {
+    "stt": { "program": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run_stt_windows.ps1"] },
+    "tts": { "program": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/run_tts_windows.ps1"] }
+  }
+}

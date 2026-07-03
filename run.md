@@ -20,9 +20,10 @@ whisperlivekit-server \
 
 
 
-TTS — VieNeu-TTS (reuses the VieNeu-TTS venv; torch-free, model already cached)
+# TTS — VieNeu-TTS (reuses the VieNeu-TTS venv; torch-free, model already cached)
 
 cd VieNeu-TTS && uv sync          # one-time: torch-free core ('vieneu' SDK + deps)
+
 # `uv sync` does NOT install these two (they live only in the heavy gpu group):
 uv pip install --python .venv "llama-cpp-python==0.3.16" \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal/ \

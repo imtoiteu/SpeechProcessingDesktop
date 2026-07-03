@@ -84,7 +84,7 @@ uv pip install --python .venv-chunkformer -r requirements-chunkformer.txt
 ## Run
 
 ```bash
-# STT server + web UI on :8000
+# STT server + web UI on :8000 (equivalently: ./scripts/run_stt_server.sh)
 whisperlivekit-server \
   --model large-v3-turbo \
   --backend mlx-whisper \
@@ -103,6 +103,29 @@ Then open **http://localhost:8000**:
 - **Text → Speech** — pick a model + voice, type text or paste a URL, and stream the audio.
 
 > Exact run/stop commands and environment variables are in [`run.md`](run.md).
+
+## Desktop app (optional)
+
+A native desktop **launcher** (Tauri v2) wraps the same web UI in an app window and
+supervises the STT/TTS servers as local sidecars — it does **not** replace the web
+version above. It auto-starts STT if :8000 isn't already up, opens the STT UI, and
+starts TTS on demand; on exit it stops **only** the servers it started itself.
+
+```bash
+cd desktop && npm install
+npm run dev     # dev mode (needs .venv STT already set up — see Setup)
+npm run build   # produce a .app / .dmg
+```
+
+Platform commands are read from an OS-aware map, [`scripts/launch.config.json`](scripts/launch.config.json),
+so backends can change without recompiling. **macOS Apple Silicon is the primary,
+tested runtime.** Windows and Linux are **structurally prepared** — a Tauri shell plus
+`faster-whisper`-based STT scripts (`run_stt_windows.ps1` / `run_stt_linux.sh`) and
+CPU/CUDA `llama-cpp-python` TTS scripts — but their STT/TTS backends are **pending
+validation on real Windows/Linux hardware** (no MLX/Metal there). Full prerequisites,
+build steps, cross-platform notes, and per-OS test checklists are in
+[`docs/DESKTOP_APP.md`](docs/DESKTOP_APP.md). The desktop app cannot be built or tested
+on the Linux VPS (no webview toolchain, no MLX/Metal).
 
 ## Models
 

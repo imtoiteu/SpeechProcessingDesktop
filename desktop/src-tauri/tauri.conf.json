@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "STTLive",
+  "version": "0.1.0",
+  "identifier": "com.sttlive.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "STTLive — Vietnamese Speech <-> Text",
+        "width": 1200,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "comment": "Local-first launcher: CSP disabled so the window can embed the localhost STT UI (:8000) in an iframe and talk to the TTS sidecar (:8011). Nothing is loaded from the public internet.",
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "comment": "'all' builds only the bundle types valid for the HOST OS: macOS -> app + dmg; Windows -> nsis (.exe) + msi; Linux -> appimage + deb + rpm. Tauri cross-compiles nothing, so each installer is produced on its own OS.",
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
+  }
+}

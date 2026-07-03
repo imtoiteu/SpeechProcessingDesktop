@@ -29,8 +29,34 @@ stage0/results/
 *.bin
 *.gguf
 *.pt
+*.pth
 *.ct2
 *.onnx
+*.safetensors
+.cache/
+
+# --- Audio / generated media (regenerable; keep out of git) ---
+*.mp3
+*.wav
+*.m4a
+uploads/
+outputs/
+tts-output/
+tmp/
+logs/
+*.log
+
+# --- Secrets ---
+.env
+.env.local
+
+# --- Desktop app (Tauri) build output ---
+node_modules/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+target/
 
 # --- OS ---
 .DS_Store

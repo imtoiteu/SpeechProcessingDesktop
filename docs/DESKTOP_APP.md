@@ -1,0 +1,319 @@
+# STTLive Desktop App
+
+A **native desktop launcher/wrapper** (Tauri v2) around the existing STTLive stack.
+It changes nothing about how STT or TTS work — it only *supervises* them and shows
+the existing web UI inside an app window.
+
+## What it does
+
+1. Locates the repo (via `STTLIVE_REPO`, the working directory, or the executable path).
+2. Checks whether **STT** is already serving `http://localhost:8000/health`.
+   * If not, it starts STT via the platform launch command (see
+     [OS-aware launch configuration](#os-aware-launch-configuration) — macOS uses
+     [`scripts/run_stt_server.sh`](../scripts/run_stt_server.sh)).
+   * If an STT server is **already running**, it leaves it alone.
+3. Opens the existing STT web UI (`:8000`) inside the desktop window (embedded in an
+   iframe, so the web version is untouched).
+4. Checks **TTS** at `http://localhost:8011/tts/health` and shows its status.
+5. Starts **TTS on demand** — click **"Start Text-to-Speech"** — via the platform TTS
+   command (macOS: [`scripts/run_tts_server.sh`](../scripts/run_tts_server.sh)). It
+   never starts a second copy if one is already up.
+6. Shows live **STT/TTS status badges** in the top bar.
+7. On exit, stops **only** the child processes it started itself. A server that was
+   already running before the app launched is **never** killed.
+
+### Design (why it's low-risk)
+
+- The native layer only spawns the **existing launch scripts** and does HTTP health
+  checks. No STT/TTS engine code is touched, moved, or rewritten.
+- On macOS/Linux the scripts `exec` their servers, so the child PID *is* the server —
+  stopping the child stops the server cleanly (no orphaned `uvicorn`). (Windows caveat
+  below.)
+- Everything lives in a self-contained `desktop/` folder plus a handful of `scripts/`;
+  the rest of the repo is unchanged. Deleting `desktop/` fully reverts to the web-only
+  setup.
+
+```
+desktop/
+├─ package.json            # npm scripts: dev / build / icon
+├─ app-icon.png            # (you generate this — see "Icons")
+├─ ui/
+│  └─ index.html           # thin status bar + iframe of the :8000 STT UI
+└─ src-tauri/
+   ├─ Cargo.toml
+   ├─ build.rs
+   ├─ tauri.conf.json       # bundle.targets = "all" (per-OS installers)
+   ├─ capabilities/default.json
+   ├─ icons/               # placeholder PNGs (regenerate with `npm run icon`)
+   └─ src/main.rs          # process supervisor + health checks + lifecycle
+
+scripts/
+├─ launch.config.json       # OS -> {stt, tts} launch command map (edit, no recompile)
+├─ run_stt_server.sh        # macOS STT (mlx-whisper / Metal)
+├─ run_tts_server.sh        # macOS TTS (llama-cpp-python Metal)
+├─ run_stt_linux.sh         # Linux STT (faster-whisper)
+├─ run_tts_linux.sh         # Linux TTS (llama-cpp-python CPU/CUDA)
+├─ run_stt_windows.ps1      # Windows STT (faster-whisper)
+└─ run_tts_windows.ps1      # Windows TTS (llama-cpp-python CPU/CUDA)
+```
+
+## OS-aware launch configuration
+
+The launcher never hard-codes platform commands. It reads
+[`scripts/launch.config.json`](../scripts/launch.config.json), which maps each OS to
+the exact program + args used to start STT and TTS:
+
+```jsonc
+{
+  "macos":   { "stt": {"program": "bash",       "args": ["scripts/run_stt_server.sh"]},
+               "tts": {"program": "bash",       "args": ["scripts/run_tts_server.sh"]} },
+  "linux":   { "stt": {"program": "bash",       "args": ["scripts/run_stt_linux.sh"]},
+               "tts": {"program": "bash",       "args": ["scripts/run_tts_linux.sh"]} },
+  "windows": { "stt": {"program": "powershell", "args": ["-NoProfile","-ExecutionPolicy","Bypass","-File","scripts/run_stt_windows.ps1"]},
+               "tts": {"program": "powershell", "args": ["-NoProfile","-ExecutionPolicy","Bypass","-File","scripts/run_tts_windows.ps1"]} }
+}
+```
+
+- Relative paths resolve against the repo root (the app spawns with the repo as CWD).
+- To change a backend command (e.g. switch STT to `--backend whisper`, or point at a
+  different venv), **edit this file — no recompile needed**. Or edit the script it
+  points to. Or set the per-server env vars each script honours (see the table below).
+- Override the config file location with `STTLIVE_LAUNCH_CONFIG`.
+- If the file is missing or malformed, the app falls back to built-in defaults that are
+  identical to the values above, so it still works out of the box.
+
+## Prerequisites (MacBook, Apple Silicon)
+
+The desktop app is **Mac-only** to build and run. On the Mac you need:
+
+- **The STT stack already set up** (`.venv` with `whisperlivekit-server`) and, for TTS,
+  the `VieNeu-TTS/.venv` — see the root [README](../README.md#setup). The desktop app
+  launches these; it does not install them.
+- **Rust** (stable): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Xcode Command Line Tools**: `xcode-select --install`
+- **Node.js 18+** (for the Tauri CLI): `brew install node`
+- Tauri's macOS system webview (WKWebView) ships with macOS — nothing to install.
+
+## Install & run
+
+```bash
+cd desktop
+npm install            # installs the @tauri-apps/cli dev dependency
+
+# Dev mode — hot-reloads the Rust supervisor + UI. STT auto-starts if :8000 is down.
+npm run dev
+
+# Release build — produces STTLive.app and a .dmg under
+# desktop/src-tauri/target/release/bundle/
+npm run build
+```
+
+If you run the **built** `.app` from outside the repo, tell it where the repo is:
+
+```bash
+STTLIVE_REPO="$HOME/Desktop/Speech2Text" open -a STTLive
+```
+
+(When launched from within the repo, or in `npm run dev`, the repo root is found
+automatically.)
+
+## Icons
+
+The committed `src-tauri/icons/*.png` are flat placeholder icons so `dev`/`build`
+don't fail, and `desktop/app-icon.png` is a placeholder source (a copy of the 512px
+icon). **Before packaging** (especially for Windows `.ico` / macOS `.icns`), regenerate
+all platform icon formats from a real square PNG:
+
+```bash
+cd desktop && npm run icon    # tauri icon ./app-icon.png -> all sizes incl. .icns/.ico
+```
+
+Replace `desktop/app-icon.png` with your own 512×512+ PNG first to brand the app.
+
+## Configuration (env vars)
+
+The scripts the app launches accept the same env vars as manual use:
+
+| Server | Vars |
+|---|---|
+| STT | `STT_MODEL`, `STT_BACKEND`, `STT_BACKEND_POLICY`, `STT_LANGUAGE`, `STT_HOST`, `STT_PORT`, `STT_PYTHON` |
+| TTS | `TTS_BACKBONE`, `TTS_CODEC`, `TTS_DEVICE`, `TTS_PORT`, `TTS_EAGER_LOAD`, `TTS_VENV`, `TTS_PYTHON` |
+
+Set them in the environment before launching the app. The desktop app itself reads
+only `STTLIVE_REPO` (optional repo-root override).
+
+## What cannot be tested on the Linux VPS
+
+Everything Apple-specific:
+
+- MLX-Whisper / Metal STT inference.
+- Microphone capture & streaming.
+- The real VieNeu-TTS model (Metal `llama-cpp-python` wheels).
+- The Tauri build itself (needs macOS WKWebView + Xcode toolchain).
+
+The VPS is for editing the launcher, scripts, and docs only. **All runtime behavior
+must be verified on the MacBook.**
+
+## MacBook test checklist
+
+Run these on the Mac after pulling the branch and doing `cd desktop && npm install`:
+
+- [ ] **STT launch** — start the app with nothing on :8000; STT auto-starts and the
+      UI appears once `/health` is ready. (First run downloads/loads the MLX model.)
+- [ ] **No double-start** — start `whisperlivekit-server` manually first, then launch
+      the app; it should attach to the running server and **not** spawn a second one.
+- [ ] **Microphone / streaming STT** — in the *Speech → Text* tab, run live mic
+      transcription; grant the mic permission prompt.
+- [ ] **File / batch STT** — upload an audio/video file, pick a model, transcribe.
+- [ ] **TTS launch** — click **Start Text-to-Speech**; the TTS badge turns green once
+      `:8011/tts/health` is ready.
+- [ ] **Text-to-Speech tab** — pick a model + voice, synthesize/stream audio.
+- [ ] **App-close cleanup** — quit the app (Cmd-Q). Servers the app started stop
+      (`lsof -i :8000` / `lsof -i :8011` show nothing). A server you started manually
+      **before** the app keeps running.
+- [ ] **Desktop build** — `npm run build` produces `STTLive.app` / `.dmg`; launch the
+      bundle (with `STTLIVE_REPO` set if outside the repo) and repeat the STT/TTS checks.
+
+---
+
+# Windows
+
+> **Status: structurally prepared, runtime pending validation on real Windows.**
+> The Tauri desktop shell, the OS-aware launch map, and the Windows PowerShell
+> launch scripts are all in place. The STT/TTS *backends* have not been run on
+> Windows from this repo yet — they must be validated on an actual Windows machine.
+> Nothing about Windows was faked or claimed as tested.
+
+### Why STT/TTS need different backends on Windows
+
+- **STT**: the macOS command uses `--backend mlx-whisper`, which is Apple-Silicon
+  only. `scripts/run_stt_windows.ps1` defaults to `--backend faster-whisper` instead —
+  the cross-platform backend that WhisperLiveKit's own CLI auto-selects on non-Apple
+  hosts (CPU by default; CUDA if a GPU build of faster-whisper/ctranslate2 is installed).
+  This is the upstream-supported Windows path, but accuracy/latency on Windows is
+  **unverified** here.
+- **TTS**: the macOS setup installs the **Metal** `llama-cpp-python` wheel. Windows has
+  no Metal, so `scripts/run_tts_windows.ps1` expects a **CPU** (or CUDA) wheel. TTS is
+  torch-free (llama.cpp + ONNX codec), so CPU is the safe default, but this has **not**
+  been run on Windows.
+
+### Prerequisites (Windows)
+
+- **Rust** (stable, MSVC toolchain): <https://rustup.rs>
+- **Microsoft C++ Build Tools** (Desktop C++ workload).
+- **WebView2 runtime** — preinstalled on Windows 10/11; otherwise install the Evergreen
+  runtime from Microsoft.
+- **Node.js 18+**: <https://nodejs.org>
+- **Python 3.12 + `uv`**, plus the STT and TTS venvs (see backend setup below).
+
+### Windows backend setup (pending validation)
+
+```powershell
+# STT venv (faster-whisper — CPU; add a CUDA build for GPU)
+uv venv --python 3.12 .venv
+uv pip install --python .venv -e .\WhisperLiveKit
+uv pip install --python .venv faster-whisper
+
+# TTS venv (VieNeu-TTS core + CPU llama-cpp-python wheel)
+cd VieNeu-TTS; uv sync; cd ..
+uv pip install --python VieNeu-TTS\.venv "llama-cpp-python==0.3.16" `
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu/ `
+    --index-strategy unsafe-best-match
+uv pip install --python VieNeu-TTS\.venv "trafilatura>=2.0.0"
+```
+
+### Windows dev / build
+
+```powershell
+cd desktop
+npm install
+npm run dev      # dev shell (STT auto-start requires the STT venv above)
+npm run build    # -> NSIS .exe + .msi under desktop\src-tauri\target\release\bundle\
+```
+
+### Windows runtime limitations
+
+- **Backends unverified** — treat STT/TTS on Windows as experimental until run on real
+  hardware.
+- **Process cleanup caveat** — PowerShell cannot `exec`-replace itself, so the launcher's
+  child is the `powershell` process, and killing it may **not** kill the Python server it
+  spawned (possible orphaned `python.exe`). macOS/Linux don't have this problem (bash
+  `exec`). If you hit orphans, stop the server manually
+  (`Get-Process python | Stop-Process`) — a job-object based tree-kill can be added later.
+- **No MLX/Metal** — do not expect Apple-Silicon-class speed.
+
+### Windows test checklist
+
+- [ ] **Tauri app launch** — `npm run dev` opens the STTLive window.
+- [ ] **STT backend available** — `powershell -File scripts\run_stt_windows.ps1` starts
+      `whisperlivekit-server` with `faster-whisper` and serves `:8000/health`.
+- [ ] **TTS backend available** — `powershell -File scripts\run_tts_windows.ps1` serves
+      `:8011/tts/health` (CPU llama-cpp-python wheel installed).
+- [ ] **Health checks** — both status badges turn green in the app.
+- [ ] **Packaging output** — `npm run build` produces `.exe` (NSIS) and/or `.msi`.
+- [ ] **Cleanup** — after quitting, confirm no orphaned `python.exe` (see caveat above).
+
+---
+
+# Linux
+
+> **Status: structurally prepared, runtime pending validation on real Linux.**
+> The Tauri shell, launch map, and Linux shell scripts exist. The STT `faster-whisper`
+> path is upstream-supported on Linux; TTS runs via a CPU/CUDA `llama-cpp-python` wheel.
+> Neither has been run on Linux from this repo — validate on a real Linux machine.
+> (This VPS can edit the code but cannot run the webview build or the ML backends.)
+
+### Prerequisites (Linux, Debian/Ubuntu example)
+
+```bash
+# Tauri system deps (WebKitGTK)
+sudo apt update
+sudo apt install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+# Rust + Node
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# Node.js 18+ via your distro or nvm
+```
+
+### Linux backend setup (pending validation)
+
+```bash
+# STT venv (faster-whisper — CPU; add a CUDA build for GPU)
+uv venv --python 3.12 .venv
+uv pip install --python .venv -e ./WhisperLiveKit
+uv pip install --python .venv faster-whisper
+
+# TTS venv (VieNeu-TTS core + CPU llama-cpp-python wheel)
+cd VieNeu-TTS && uv sync && cd ..
+uv pip install --python VieNeu-TTS/.venv "llama-cpp-python==0.3.16" \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu/ \
+    --index-strategy unsafe-best-match
+uv pip install --python VieNeu-TTS/.venv "trafilatura>=2.0.0"
+```
+
+### Linux dev / build
+
+```bash
+cd desktop
+npm install
+npm run dev      # dev shell (STT auto-start requires the STT venv above)
+npm run build    # -> AppImage + .deb + .rpm under desktop/src-tauri/target/release/bundle/
+```
+
+### Linux runtime limitations
+
+- **Backends unverified** — STT/TTS on Linux is experimental until run on real hardware.
+- **No MLX/Metal** — CPU (or CUDA) only; do not expect Apple-Silicon speed.
+- **WebKitGTK required** — the app window needs `libwebkit2gtk-4.1` at runtime.
+
+### Linux test checklist
+
+- [ ] **Tauri app launch** — `npm run dev` opens the STTLive window.
+- [ ] **STT backend available** — `bash scripts/run_stt_linux.sh` starts
+      `whisperlivekit-server` with `faster-whisper` and serves `:8000/health`.
+- [ ] **TTS backend available** — `bash scripts/run_tts_linux.sh` serves
+      `:8011/tts/health` (CPU llama-cpp-python wheel installed).
+- [ ] **Health checks** — both status badges turn green in the app.
+- [ ] **Packaging output** — `npm run build` produces an AppImage / `.deb` / `.rpm`.
+- [ ] **App-close cleanup** — servers the app started stop; a pre-existing server is left
+      running (bash `exec` gives clean single-PID kill, same as macOS).

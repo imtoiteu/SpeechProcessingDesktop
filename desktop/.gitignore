@@ -1,0 +1,8 @@
+# Node / Tauri CLI
+node_modules/
+dist/
+
+# Rust / Tauri build output
+src-tauri/target/
+# Tauri-generated schemas & platform scaffolding (regenerated on build)
+src-tauri/gen/

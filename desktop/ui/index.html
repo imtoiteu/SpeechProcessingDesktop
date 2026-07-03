@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>STTLive</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --bar: #111a2e;
+        --fg: #e6edf6;
+        --muted: #93a1b5;
+        --ok: #16a34a;
+        --bad: #dc2626;
+        --wait: #d97706;
+        --accent: #0f766e;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+        font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      #app { display: flex; flex-direction: column; height: 100vh; }
+      #bar { display: flex; align-items: center; gap: 16px; padding: 8px 14px;
+        background: var(--bar); border-bottom: 1px solid #1f2b45; flex: 0 0 auto; }
+      #bar .brand { font-weight: 700; letter-spacing: .3px; }
+      .badge { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px;
+        border-radius: 999px; background: #0e1626; border: 1px solid #24314d; color: var(--muted); }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+      .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+      .dot.wait { background: var(--wait); }
+      .spacer { flex: 1; }
+      button { font: inherit; color: var(--fg); background: var(--accent);
+        border: none; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      button.ghost { background: transparent; border: 1px solid #2a3a5c; color: var(--muted); }
+      #stage { position: relative; flex: 1; }
+      iframe { border: 0; width: 100%; height: 100%; background: #fff; }
+      #overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px; text-align: center;
+        background: var(--bg); color: var(--muted); }
+      #overlay.hidden { display: none; }
+      .spin { width: 34px; height: 34px; border: 3px solid #24314d;
+        border-top-color: var(--accent); border-radius: 50%; animation: s 1s linear infinite; }
+      @keyframes s { to { transform: rotate(360deg); } }
+      code { color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="bar">
+        <span class="brand">STTLive</span>
+        <span class="badge"><span id="stt-dot" class="dot"></span> STT <span id="stt-txt" class="muted">…</span></span>
+        <span class="badge"><span id="tts-dot" class="dot"></span> TTS <span id="tts-txt" class="muted">…</span></span>
+        <div class="spacer"></div>
+        <button id="tts-btn">Start Text-to-Speech</button>
+        <button id="reload-btn" class="ghost" title="Reload the STT UI">Reload</button>
+      </div>
+      <div id="stage">
+        <iframe id="stt-frame" title="STTLive Speech-to-Text"
+          allow="microphone; autoplay; clipboard-read; clipboard-write"></iframe>
+        <div id="overlay">
+          <div class="spin"></div>
+          <div id="overlay-msg">Starting the Speech-to-Text server…<br />
+            <small>First launch loads the MLX-Whisper model; this can take a while.</small></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const STT_UI = "http://localhost:8000";
+      // withGlobalTauri: true exposes the API on window.__TAURI__ (no bundler).
+      const invoke = window.__TAURI__?.core?.invoke;
+
+      const el = (id) => document.getElementById(id);
+      let sttUp = false;      // did we already point the iframe at the live UI?
+      let ttsStarting = false;
+
+      function paint(dot, txt, s) {
+        const d = el(dot), t = el(txt);
+        if (s.running) { d.className = "dot ok"; t.textContent = "running"; }
+        else if (s.started_by_app) { d.className = "dot wait"; t.textContent = "starting…"; }
+        else { d.className = "dot bad"; t.textContent = "stopped"; }
+        return s;
+      }
+
+      async function poll() {
+        if (!invoke) { el("overlay-msg").textContent =
+          "Not running inside the desktop app (Tauri API unavailable)."; return; }
+        try {
+          const stt = paint("stt-dot", "stt-txt", await invoke("stt_status"));
+          const tts = paint("tts-dot", "tts-txt", await invoke("tts_status"));
+
+          // Reveal the real STT UI once :8000 is healthy.
+          if (stt.running && !sttUp) {
+            el("stt-frame").src = STT_UI;
+            el("overlay").classList.add("hidden");
+            sttUp = true;
+          }
+          if (tts.running) ttsStarting = false;
+          el("tts-btn").disabled = tts.running || ttsStarting;
+          el("tts-btn").textContent = tts.running ? "Text-to-Speech ready"
+            : ttsStarting ? "Starting TTS…" : "Start Text-to-Speech";
+        } catch (e) { console.error(e); }
+      }
+
+      el("tts-btn").addEventListener("click", async () => {
+        if (!invoke) return;
+        ttsStarting = true; el("tts-btn").disabled = true;
+        el("tts-btn").textContent = "Starting TTS…";
+        try { await invoke("start_tts"); }
+        catch (e) { alert("Could not start TTS:\n" + e); ttsStarting = false; }
+      });
+
+      el("reload-btn").addEventListener("click", () => {
+        if (sttUp) el("stt-frame").src = STT_UI; else location.reload();
+      });
+
+      poll();
+      setInterval(poll, 1500);
+    </script>
+  </body>
+</html>
