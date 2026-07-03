@@ -549,6 +549,35 @@ function drawWaveform() {
   animationFrame = requestAnimationFrame(drawWaveform);
 }
 
+// --- microphone availability + human-readable error classification -------
+// Split so the UI can tell apart three very different failures instead of one
+// generic "WebSocket or mic" message:
+//   * mic API missing   -> the webview has no microphone access at all
+//   * permission denied  -> user/OS blocked the mic
+//   * other capture error
+function micApiAvailable() {
+  return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+}
+function micUnavailableMessage() {
+  return "Microphone is unavailable in this window. In the STTLive desktop app on macOS, " +
+    "allow microphone access under System Settings › Privacy & Security › Microphone (enable STTLive), " +
+    "then reopen the app. In a browser, open http://localhost:8000 directly and accept the mic prompt.";
+}
+function micErrorMessage(err) {
+  const name = err && err.name;
+  if (!micApiAvailable() || name === "NotFoundError" || name === "NotReadableError" || name === "OverconstrainedError") {
+    return micUnavailableMessage();
+  }
+  if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") {
+    return "Microphone permission was denied. Allow microphone access for STTLive " +
+      "(macOS: System Settings › Privacy & Security › Microphone), then try again.";
+  }
+  if (window.location.hostname === "0.0.0.0") {
+    return "Error accessing microphone. Browsers may block the mic on 0.0.0.0 — use localhost:8000 instead.";
+  }
+  return "Could not access the microphone. Please allow microphone access and try again.";
+}
+
 async function startRecording() {
   try {
     resetTranscriptStore();
@@ -675,12 +704,7 @@ async function startRecording() {
     isRecording = true;
     updateUI();
   } catch (err) {
-    if (window.location.hostname === "0.0.0.0") {
-      statusText.textContent =
-        "Error accessing microphone. Browsers may block microphone access on 0.0.0.0. Try using localhost:8000 instead.";
-    } else {
-      statusText.textContent = "Error accessing microphone. Please allow microphone access.";
-    }
+    statusText.textContent = micErrorMessage(err);
     console.error(err);
   }
 }
@@ -783,20 +807,51 @@ async function toggleRecording() {
       console.log("Waiting for stop, early return");
       return;
     }
-    console.log("Connecting to WebSocket");
-    try {
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-        await configReady;
-        await startRecording();
-      } else {
-        await setupWebSocket(withLanguage(websocketUrl));
-        await configReady;
-        await startRecording();
-      }
-    } catch (err) {
-      statusText.textContent = "Could not connect to WebSocket or access mic. Aborted.";
-      console.error(err);
+
+    // Fail fast with a mic-specific message when the webview exposes no mic API
+    // at all (common in a desktop iframe without permission). This is NOT a
+    // server/WebSocket problem, so don't blame the socket.
+    if (!isExtension && !micApiAvailable()) {
+      statusText.textContent = micUnavailableMessage();
+      return;
     }
+
+    console.log("Connecting to WebSocket");
+
+    // 1) WebSocket (STT server reachability) — reported distinctly from the mic.
+    if (!(websocket && websocket.readyState === WebSocket.OPEN)) {
+      try {
+        await setupWebSocket(withLanguage(websocketUrl));
+      } catch (wsErr) {
+        // Probe the HTTP /health endpoint to tell "server down" apart from
+        // "server up but the WebSocket specifically failed" (health != socket).
+        let serverUp = false;
+        try {
+          const resp = await fetch(getHttpBase() + "/health", { cache: "no-store" });
+          serverUp = resp.ok;
+        } catch (e) { serverUp = false; }
+        statusText.textContent = serverUp
+          ? "STT server is running, but the live WebSocket could not connect at " +
+            getWsBase() + "/asr. Please try again."
+          : "Speech-to-Text server not reachable at " + getWsBase() +
+            ". Confirm the STT server is running on port 8000.";
+        console.error(wsErr);
+        return;
+      }
+    }
+
+    // 2) Server handshake (config message).
+    try {
+      await configReady;
+    } catch (cfgErr) {
+      statusText.textContent =
+        "Connected, but the STT server did not complete its handshake. Please try again.";
+      console.error(cfgErr);
+      return;
+    }
+
+    // 3) Microphone — startRecording() sets its own classified mic message on failure.
+    await startRecording();
   } else {
     console.log("Stopping recording");
     stopRecording();
@@ -838,14 +893,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log("Could not enumerate microphones on load:", error);
   }
 });
-navigator.mediaDevices.addEventListener('devicechange', async () => {
-  console.log('Device change detected, re-enumerating microphones');
-  try {
-    await enumerateMicrophones();
-  } catch (error) {
-    console.log("Error re-enumerating microphones:", error);
-  }
-});
+// Guard: navigator.mediaDevices is undefined in non-secure / restricted webview
+// contexts (e.g. an embedded desktop iframe without mic permission). Calling
+// .addEventListener on undefined here would throw at top level and abort the rest
+// of this script — which is what left the language/model selectors empty in the
+// desktop build. Feature-detect so the page keeps working even when mic is absent.
+if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    console.log('Device change detected, re-enumerating microphones');
+    try {
+      await enumerateMicrophones();
+    } catch (error) {
+      console.log("Error re-enumerating microphones:", error);
+    }
+  });
+}
 
 
 settingsToggle.addEventListener("click", () => {

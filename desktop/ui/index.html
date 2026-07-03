@@ -67,8 +67,24 @@
 
     <script>
       const STT_UI = "http://localhost:8000";
+      // ?desktop=1 tells the embedded STT/TTS UI it is running inside the desktop
+      // app, so its TTS tab shows an in-tab "Start TTS Server" button that asks
+      // this wrapper (via postMessage) to launch the sidecar — no terminal needed.
+      const STT_UI_SRC = STT_UI + "/?desktop=1";
       // withGlobalTauri: true exposes the API on window.__TAURI__ (no bundler).
       const invoke = window.__TAURI__?.core?.invoke;
+
+      // Bridge: the embedded TTS tab is cross-origin and cannot call Tauri
+      // directly, so it posts a request here and we run the OS-aware start_tts
+      // command. The status badges below reflect the result via normal polling.
+      window.addEventListener("message", async (ev) => {
+        const msg = ev && ev.data;
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type === "sttlive:start-tts" && invoke) {
+          try { await invoke("start_tts"); }
+          catch (e) { console.error("start_tts (from TTS tab) failed:", e); }
+        }
+      });
 
       const el = (id) => document.getElementById(id);
       let sttUp = false;      // did we already point the iframe at the live UI?
@@ -91,7 +107,7 @@
 
           // Reveal the real STT UI once :8000 is healthy.
           if (stt.running && !sttUp) {
-            el("stt-frame").src = STT_UI;
+            el("stt-frame").src = STT_UI_SRC;
             el("overlay").classList.add("hidden");
             sttUp = true;
           }
@@ -111,7 +127,7 @@
       });
 
       el("reload-btn").addEventListener("click", () => {
-        if (sttUp) el("stt-frame").src = STT_UI; else location.reload();
+        if (sttUp) el("stt-frame").src = STT_UI_SRC; else location.reload();
       });
 
       poll();

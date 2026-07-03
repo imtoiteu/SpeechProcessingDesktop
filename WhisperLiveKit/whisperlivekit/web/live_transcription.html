@@ -152,6 +152,10 @@
                 </div>
             </div>
             <p id="ttsStatus" class="tts-status"></p>
+            <!-- Desktop-only contextual launcher: shown when the TTS sidecar is
+                 not running so the user never needs a terminal. Reuses the existing
+                 secondary-button style (no new layout). -->
+            <button id="ttsStartServer" class="tts-secondary-btn hidden" type="button">Start TTS Server</button>
 
             <div class="tts-grid">
                 <!-- Input column (Text / URL) -->
@@ -241,10 +245,11 @@
             var p = location.protocol === "https:" ? "https:" : "http:";
             return p + "//" + (location.hostname || "localhost") + ":8011";
         }
+        function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
         function getBase() {
             var i = $("ttsServerUrl");
             var v = (i && i.value && i.value.trim()) || "";
-            if (!v) { v = localStorage.getItem(LS_KEY) || defaultBase(); }
+            if (!v) { v = lsGet(LS_KEY) || defaultBase(); }
             return v.replace(/\/+$/, "");
         }
         function parseDetail(t) { try { return JSON.parse(t).detail || t; } catch (e) { return t; } }
@@ -264,6 +269,26 @@
             chip.className = "tts-status-chip " + s[1];
         }
 
+        // --- desktop integration -----------------------------------------
+        // In the STTLive desktop app the UI is embedded and the wrapper passes
+        // ?desktop=1; there we can launch the TTS sidecar for the user. On the
+        // plain web page we fall back to a "run the script" hint instead.
+        var IS_DESKTOP = (function () {
+            try { if (new URLSearchParams(location.search).get("desktop") === "1") return true; } catch (e) {}
+            try { return window.self !== window.top; } catch (e) { return true; }
+        })();
+        var ttsHealthy = false, ttsStartPolling = false;
+
+        function setGenerateEnabled(on) { var g = $("ttsGenerate"); if (g) g.disabled = !on; }
+        // Single disabled placeholder option + disabled control (before server up).
+        function setSelectPlaceholder(sel, text) {
+            if (!sel) return;
+            sel.innerHTML = "";
+            var o = document.createElement("option");
+            o.value = ""; o.textContent = text; o.disabled = true; o.selected = true;
+            sel.appendChild(o); sel.disabled = true;
+        }
+
         // --- tab switching (toggles body.tts-mode; STT DOM untouched) ---
         function activate(which) {
             var stt = which === "stt";
@@ -271,11 +296,21 @@
             var t1 = $("tab-stt"), t2 = $("tab-tts");
             if (t1) { t1.classList.toggle("is-active", stt); t1.setAttribute("aria-selected", stt ? "true" : "false"); }
             if (t2) { t2.classList.toggle("is-active", !stt); t2.setAttribute("aria-selected", !stt ? "true" : "false"); }
-            if (!stt) { checkHealth(); loadModels(); loadVoices(); }
+            if (!stt) { checkHealth(); }
         }
 
+        // Health check: drives the whole TTS-tab enabled/disabled state. On success
+        // it enables Generate and loads models/voices; on failure it disables
+        // Generate, shows placeholder selects, and (desktop) reveals Start TTS Server.
         function checkHealth() {
-            fetch(getBase() + "/tts/health").then(function (r) { return r.json(); }).then(function (h) {
+            var startBtn = $("ttsStartServer");
+            return fetch(getBase() + "/tts/health").then(function (r) {
+                if (!r.ok) throw new Error("unhealthy");
+                return r.json();
+            }).then(function (h) {
+                ttsHealthy = true;
+                if (startBtn) startBtn.classList.add("hidden");
+                setGenerateEnabled(true);
                 if (!h.checkpoints_present) {
                     setStatus("TTS server up; model not cached yet (downloads on first use).");
                 } else if (h.model_loaded) {
@@ -283,9 +318,58 @@
                 } else {
                     setStatus("Ready (model loads on first request) · " + (h.model_key || ""));
                 }
+                loadModels(); loadVoices();
+                return true;
             }).catch(function () {
-                setStatus("Cannot reach TTS server at " + getBase() + ". Start it with scripts/run_tts_server.sh.", true);
+                ttsHealthy = false;
+                setGenerateEnabled(false);
+                setSelectPlaceholder($("ttsModel"), "Start TTS server first");
+                setSelectPlaceholder($("ttsVoice"), "Start TTS server first");
+                if (IS_DESKTOP) {
+                    if (startBtn) { startBtn.classList.remove("hidden"); startBtn.disabled = false; startBtn.textContent = "Start TTS Server"; }
+                    setStatus("TTS server is not running. Click “Start TTS Server” to launch it.", true);
+                } else {
+                    if (startBtn) startBtn.classList.add("hidden");
+                    setStatus("Cannot reach TTS server at " + getBase() + ". Start it with: ./scripts/run_tts_server.sh", true);
+                }
+                return false;
             });
+        }
+
+        // Ask the desktop wrapper to launch the TTS sidecar, then poll health until
+        // ready. Never requires the user to run a terminal command in desktop mode.
+        function startServer() {
+            if (ttsStartPolling) return;
+            var startBtn = $("ttsStartServer");
+            if (!IS_DESKTOP) {
+                setStatus("Start the TTS server in a terminal: ./scripts/run_tts_server.sh", true);
+                return;
+            }
+            ttsStartPolling = true;
+            if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Starting TTS server…"; }
+            setStatus("Starting the TTS server… first run loads the model, which can take a while.");
+            // The wrapper (desktop/ui/index.html) listens for this and calls the
+            // OS-aware `start_tts` sidecar command. Harmless no-op on the web page.
+            try { window.parent.postMessage({ type: "sttlive:start-tts" }, "*"); } catch (e) {}
+            var waited = 0, STEP = 1500, MAX = 90000;
+            var iv = setInterval(function () {
+                fetch(getBase() + "/tts/health").then(function (r) {
+                    if (!r.ok) throw new Error("not ready");
+                    return r.json();
+                }).then(function () {
+                    clearInterval(iv); ttsStartPolling = false;
+                    if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start TTS Server"; }
+                    checkHealth();
+                }).catch(function () {
+                    waited += STEP;
+                    if (waited >= MAX) {
+                        clearInterval(iv); ttsStartPolling = false;
+                        if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start TTS Server"; }
+                        setStatus("TTS server did not become ready within 90s. Check the TTS dependency " +
+                                  "setup (VieNeu-TTS venv + llama-cpp-python) — see docs/DESKTOP_APP.md.", true);
+                    }
+                });
+            }, STEP);
         }
 
         // --- models (mirrors VieNeu web_stream /models + /set_model) ---
@@ -299,6 +383,7 @@
                     if (m.active) { o.selected = true; active = m; }
                     sel.appendChild(o);
                 });
+                sel.disabled = false;  // re-enable after the placeholder state
                 if ($("ttsModelDesc")) $("ttsModelDesc").textContent = (active && active.desc) || "";
             }).catch(function () { /* health() reported the outage */ });
         }
@@ -330,6 +415,7 @@
                 var o = document.createElement("option");
                 o.value = v.id; o.textContent = v.name || v.id; sel.appendChild(o);
             });
+            sel.disabled = false;  // re-enable after the placeholder state
             if (cur) sel.value = cur;
         }
         function loadVoices() {
@@ -379,6 +465,11 @@
         function concat(a, b) { var c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); return c; }
 
         function generate() {
+            if (!ttsHealthy) {
+                setStatus(IS_DESKTOP ? "Start the TTS server first (button above)."
+                                     : "Start the TTS server first: ./scripts/run_tts_server.sh", true);
+                return;
+            }
             var text = ($("ttsText").value || "").trim();
             if (!text) { setStatus("Please enter some text.", true); return; }
             stop();
@@ -513,10 +604,10 @@
         function init() {
             var s = $("ttsServerUrl");
             if (s) {
-                s.value = localStorage.getItem(LS_KEY) || defaultBase();
+                s.value = lsGet(LS_KEY) || defaultBase();
                 s.addEventListener("change", function () {
-                    localStorage.setItem(LS_KEY, s.value.trim());
-                    checkHealth(); loadModels(); loadVoices();
+                    try { localStorage.setItem(LS_KEY, s.value.trim()); } catch (e) {}
+                    checkHealth();
                 });
             }
             var temp = $("ttsTemp");
@@ -525,9 +616,15 @@
             ["ttsModeText", "ttsModeUrl"].forEach(function (id) { var el = $(id); if (el) el.addEventListener("change", syncMode); });
             var ms = $("ttsModel"); if (ms) ms.addEventListener("change", onModelChange);
             var bind = [["tab-stt", function () { activate("stt"); }], ["tab-tts", function () { activate("tts"); }],
-                        ["ttsGenerate", generate], ["ttsStop", stop], ["ttsExtract", extractUrl]];
+                        ["ttsGenerate", generate], ["ttsStop", stop], ["ttsExtract", extractUrl],
+                        ["ttsStartServer", startServer]];
             bind.forEach(function (p) { var el = $(p[0]); if (el) el.addEventListener("click", p[1]); });
             updateCounts(); syncMode();
+            // Until the first successful health check, keep Generate disabled and the
+            // model/voice selects showing a clear placeholder (per the desktop UX spec).
+            setGenerateEnabled(false);
+            setSelectPlaceholder($("ttsModel"), "Start TTS server first");
+            setSelectPlaceholder($("ttsVoice"), "Start TTS server first");
         }
 
         if (document.readyState === "loading") {

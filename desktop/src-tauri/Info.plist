@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS-only keys merged into the generated Info.plist by the Tauri bundler.
+  NSMicrophoneUsageDescription is REQUIRED for the WKWebView to request the
+  microphone (live Speech-to-Text). Without it, macOS silently denies capture
+  and getUserMedia fails. This only adds the usage string; it grants nothing by
+  itself — the user still approves the OS prompt on first use.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>STTLive uses the microphone for live Vietnamese speech-to-text transcription.</string>
+  </dict>
+</plist>

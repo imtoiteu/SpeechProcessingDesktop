@@ -181,19 +181,92 @@ Everything Apple-specific:
 The VPS is for editing the launcher, scripts, and docs only. **All runtime behavior
 must be verified on the MacBook.**
 
+## Desktop runtime behavior: STT mic / WebSocket / TTS startup
+
+These fixes address issues seen only in the embedded desktop webview (the web
+version at `http://localhost:8000` was unaffected). All changes are guarded so the
+plain web page behaves exactly as before.
+
+### STT — blank dropdowns + "WebSocket or mic aborted" (root cause)
+
+The STT frontend had an **unguarded top-level** call,
+`navigator.mediaDevices.addEventListener('devicechange', …)`. In the desktop
+webview, `navigator.mediaDevices` is `undefined` (restricted/embedded context), so
+that line threw a `TypeError` and **aborted the rest of the script** — which is why
+the **language/model selectors were empty** (they are populated further down the
+file) while the record button (wired earlier) still "worked" enough to hit a generic
+error. Fixes in `WhisperLiveKit/whisperlivekit/web/live_transcription.js`:
+
+- **Feature-detect `navigator.mediaDevices`** before adding the `devicechange`
+  listener → the script no longer aborts → **selectors populate** (Auto/Vietnamese/
+  English, and `large-v3-turbo` etc.). This is the core fix.
+- **Health checked separately from the socket:** on a live-mic start, a WebSocket
+  failure now triggers a quick `GET /health` probe to distinguish *server down* from
+  *server up but socket failed*.
+- **The one generic error was split into three** distinct, actionable messages:
+  - *STT server not reachable* (WebSocket/health failed),
+  - *WebSocket connection failed* (server up, socket not),
+  - *microphone unavailable / permission denied* — with a friendly macOS hint
+    (System Settings › Privacy & Security › Microphone). Mic success is **not**
+    faked: if the webview exposes no mic API, the UI says so plainly.
+- File/batch STT is untouched and is restored by the same guard.
+
+### macOS microphone permission (Tauri config added)
+
+- `desktop/src-tauri/Info.plist` → `NSMicrophoneUsageDescription` (required for
+  WKWebView to prompt for the mic).
+- `desktop/src-tauri/entitlements.plist` → `com.apple.security.device.audio-input`,
+  referenced from `tauri.conf.json` → `bundle.macOS.entitlements` (hardened-runtime
+  builds).
+
+> **Must verify on Mac:** with these in place the built `.app` should prompt for and
+> use the mic. If `navigator.mediaDevices` is still `undefined` inside the embedded
+> iframe (a WebKit secure-context limitation for cross-origin frames), the guard keeps
+> the whole UI working and shows the clear mic message; the fallback is to open
+> `http://localhost:8000` in a browser (full web version) for live mic. The dropdown
+> fix does **not** depend on any of this — it works regardless.
+
+### TTS — no terminal needed
+
+The wrapper passes `?desktop=1` to the embedded UI. In desktop mode the TTS tab now:
+
+- shows an **inline "Start TTS Server"** button when the sidecar is down (the old
+  message told users to run `scripts/run_tts_server.sh` by hand — gone in desktop
+  mode);
+- keeps **"Generate speech" disabled** and the **Model/Voice selects showing
+  "Start TTS server first"** until `:8011/tts/health` is ready;
+- on click, asks the wrapper (via `postMessage`) to run the OS-aware `start_tts`
+  sidecar command, **polls `/tts/health` up to 90 s**, then loads models/voices and
+  enables Generate; the top-bar badge flips to **TTS running** via normal polling;
+- on timeout, shows a clear error pointing at the TTS dependency setup.
+
+The top-right **"Start Text-to-Speech"** button still works; the tab button is an
+additional contextual entry point. On the plain web page (no `?desktop=1`) the tab
+falls back to the original "run the script" hint — web behavior is preserved.
+
 ## MacBook test checklist
 
-Run these on the Mac after pulling the branch and doing `cd desktop && npm install`:
+Run these on the Mac after pulling the branch and doing `cd desktop && npm install`.
+**Rebuild** after pulling (`npm run build`) — the mic Info.plist/entitlement only
+take effect in a built `.app`, and dev mode may not prompt for the mic.
 
 - [ ] **STT launch** — start the app with nothing on :8000; STT auto-starts and the
       UI appears once `/health` is ready. (First run downloads/loads the MLX model.)
+- [ ] **Dropdowns populate** — the language selector shows Auto/Vietnamese/English and
+      the model selector shows `large-v3-turbo` (this was the blank-dropdown bug).
 - [ ] **No double-start** — start `whisperlivekit-server` manually first, then launch
       the app; it should attach to the running server and **not** spawn a second one.
 - [ ] **Microphone / streaming STT** — in the *Speech → Text* tab, run live mic
-      transcription; grant the mic permission prompt.
+      transcription; accept the macOS mic prompt. If denied, verify the message names
+      the mic (not a generic "WebSocket or mic" error) and points to System Settings.
+- [ ] **Error clarity** — stop the STT server and click record: the message should say
+      the *server is not reachable*, distinct from a mic-permission message.
 - [ ] **File / batch STT** — upload an audio/video file, pick a model, transcribe.
-- [ ] **TTS launch** — click **Start Text-to-Speech**; the TTS badge turns green once
-      `:8011/tts/health` is ready.
+- [ ] **TTS in-tab start** — with TTS down, open the *Text → Speech* tab: Generate is
+      disabled, selects read "Start TTS server first", and an **inline "Start TTS
+      Server"** button appears. Click it (no terminal); badge/tab flip to ready and
+      Model/Voice populate.
+- [ ] **TTS top-right button** — the header **Start Text-to-Speech** still starts TTS.
 - [ ] **Text-to-Speech tab** — pick a model + voice, synthesize/stream audio.
 - [ ] **App-close cleanup** — quit the app (Cmd-Q). Servers the app started stop
       (`lsof -i :8000` / `lsof -i :8011` show nothing). A server you started manually
