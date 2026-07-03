@@ -20,13 +20,11 @@
       }
     ],
     "security": {
-      "comment": "Local-first launcher: CSP disabled so the window can embed the localhost STT UI (:8000) in an iframe and talk to the TTS sidecar (:8011). Nothing is loaded from the public internet.",
       "csp": null
     }
   },
   "bundle": {
     "active": true,
-    "comment": "'all' builds only the bundle types valid for the HOST OS: macOS -> app + dmg; Windows -> nsis (.exe) + msi; Linux -> appimage + deb + rpm. Tauri cross-compiles nothing, so each installer is produced on its own OS.",
     "targets": "all",
     "icon": [
       "icons/32x32.png",

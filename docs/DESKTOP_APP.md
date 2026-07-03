@@ -237,6 +237,24 @@ cd desktop && npm run icon    # tauri icon ./app-icon.png -> all sizes incl. .ic
 
 Replace `desktop/app-icon.png` with your own 512×512+ PNG first to brand the app.
 
+## tauri.conf.json notes
+
+`tauri.conf.json` is validated against a **strict schema** — it rejects any key it
+does not recognise, so it must contain **no `comment` / `_comment` fields** (they
+cause `npm run build` to fail). Explanations for its non-obvious settings live here
+instead:
+
+- **`app.security.csp: null`** — the Content-Security-Policy is disabled on purpose.
+  The launcher window embeds the local (or remote) STT UI in an iframe and the TTS tab
+  talks to the TTS sidecar; a strict CSP would block those. This is a local-first
+  launcher — nothing is loaded from the public internet by the wrapper itself.
+- **`bundle.targets: "all"`** — builds only the bundle types valid for the **host OS**
+  (macOS → app + dmg; Windows → nsis `.exe` + msi; Linux → appimage + deb + rpm). Tauri
+  cross-compiles nothing, so each installer is produced on its own OS.
+- **`bundle.macOS.entitlements: entitlements.plist`** — the hardened-runtime
+  audio-input entitlement for microphone capture (paired with the
+  `NSMicrophoneUsageDescription` in `src-tauri/Info.plist`).
+
 ## Configuration (env vars)
 
 The scripts the app launches accept the same env vars as manual use:
