@@ -42,6 +42,33 @@
         border-top-color: var(--accent); border-radius: 50%; animation: s 1s linear infinite; }
       @keyframes s { to { transform: rotate(360deg); } }
       code { color: #cbd5e1; }
+
+      /* --- Settings / Connection modal (desktop-only; matches the dark theme) --- */
+      #settings { position: fixed; inset: 0; display: flex; align-items: center;
+        justify-content: center; background: rgba(4, 8, 18, .72); z-index: 20; padding: 20px; }
+      #settings.hidden { display: none; }
+      .sheet { width: 100%; max-width: 460px; max-height: 92vh; overflow: auto;
+        background: var(--bar); border: 1px solid #24314d; border-radius: 14px; padding: 20px 22px; }
+      .sheet h2 { margin: 0 0 4px; font-size: 17px; }
+      .sheet .sub { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; }
+      .field { margin-bottom: 14px; }
+      .field > label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px;
+        text-transform: uppercase; letter-spacing: .04em; }
+      .field input[type="text"], .field input[type="number"] {
+        width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3a5c;
+        background: #0e1626; color: var(--fg); font: inherit; }
+      .modes { display: flex; gap: 8px; }
+      .modes label { flex: 1; display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+        padding: 10px; border: 1px solid #2a3a5c; border-radius: 10px; background: #0e1626; }
+      .modes label.sel { border-color: var(--accent); background: #0c1a1a; }
+      .modes small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+      .checks label { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; cursor: pointer; }
+      .two { display: flex; gap: 12px; }
+      .two .field { flex: 1; }
+      #cfg-test-result { font-size: 12.5px; margin: 4px 0 0; min-height: 16px; white-space: pre-line; }
+      .actions { display: flex; gap: 10px; margin-top: 18px; }
+      .actions .spacer { flex: 1; }
+      .ok-txt { color: var(--ok); } .bad-txt { color: var(--bad); } .muted { color: var(--muted); }
     </style>
   </head>
   <body>
@@ -50,8 +77,10 @@
         <span class="brand">STTLive</span>
         <span class="badge"><span id="stt-dot" class="dot"></span> STT <span id="stt-txt" class="muted">…</span></span>
         <span class="badge"><span id="tts-dot" class="dot"></span> TTS <span id="tts-txt" class="muted">…</span></span>
+        <span id="mode-badge" class="badge" style="display:none"></span>
         <div class="spacer"></div>
         <button id="tts-btn">Start Text-to-Speech</button>
+        <button id="settings-btn" class="ghost" title="Connection settings">Settings</button>
         <button id="reload-btn" class="ghost" title="Reload the STT UI">Reload</button>
       </div>
       <div id="stage">
@@ -59,36 +88,83 @@
           allow="microphone; autoplay; clipboard-read; clipboard-write"></iframe>
         <div id="overlay">
           <div class="spin"></div>
-          <div id="overlay-msg">Starting the Speech-to-Text server…<br />
-            <small>First launch loads the MLX-Whisper model; this can take a while.</small></div>
+          <div id="overlay-msg">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop-only Connection Settings. Never shown in the plain web version
+         (that page is served from :8000 and does not include this wrapper). -->
+    <div id="settings" class="hidden">
+      <div class="sheet">
+        <h2 id="cfg-title">Connection settings</h2>
+        <p class="sub" id="cfg-sub">Choose how this desktop app connects to the STT and TTS servers.</p>
+
+        <div class="field">
+          <label>Runtime mode</label>
+          <div class="modes">
+            <label id="mode-local-l"><input type="radio" name="cfg-mode" id="mode-local" value="local" />
+              <span><b>Local Managed</b><small>This app starts & stops the servers on this machine.</small></span></label>
+            <label id="mode-remote-l"><input type="radio" name="cfg-mode" id="mode-remote" value="remote" />
+              <span><b>Remote Server</b><small>Connect to STT/TTS on another machine. Nothing is started here.</small></span></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cfg-stt-url">STT server URL</label>
+          <input type="text" id="cfg-stt-url" placeholder="http://localhost:8000" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="cfg-tts-url">TTS server URL</label>
+          <input type="text" id="cfg-tts-url" placeholder="http://localhost:8011" spellcheck="false" />
+        </div>
+
+        <div class="field checks" id="cfg-autostart-wrap">
+          <label><input type="checkbox" id="cfg-autostart-stt" /> Auto-start STT on launch (Local mode)</label>
+          <label><input type="checkbox" id="cfg-autostart-tts" /> Auto-start TTS on launch (else lazy-start on demand)</label>
+        </div>
+
+        <div class="two">
+          <div class="field">
+            <label for="cfg-timeout">Timeout (seconds)</label>
+            <input type="number" id="cfg-timeout" min="1" max="60" value="30" />
+          </div>
+          <div class="field" style="flex:1.4">
+            <label>&nbsp;</label>
+            <button id="cfg-test-btn" class="ghost" type="button" style="width:100%">Test connection</button>
+          </div>
+        </div>
+        <p id="cfg-test-result"></p>
+
+        <div class="actions">
+          <button id="cfg-cancel-btn" class="ghost" type="button">Cancel</button>
+          <div class="spacer"></div>
+          <button id="cfg-save-btn" type="button">Save &amp; Continue</button>
         </div>
       </div>
     </div>
 
     <script>
-      const STT_UI = "http://localhost:8000";
-      // ?desktop=1 tells the embedded STT/TTS UI it is running inside the desktop
-      // app, so its TTS tab shows an in-tab "Start TTS Server" button that asks
-      // this wrapper (via postMessage) to launch the sidecar — no terminal needed.
-      const STT_UI_SRC = STT_UI + "/?desktop=1";
       // withGlobalTauri: true exposes the API on window.__TAURI__ (no bundler).
       const invoke = window.__TAURI__?.core?.invoke;
-
-      // Bridge: the embedded TTS tab is cross-origin and cannot call Tauri
-      // directly, so it posts a request here and we run the OS-aware start_tts
-      // command. The status badges below reflect the result via normal polling.
-      window.addEventListener("message", async (ev) => {
-        const msg = ev && ev.data;
-        if (!msg || typeof msg !== "object") return;
-        if (msg.type === "sttlive:start-tts" && invoke) {
-          try { await invoke("start_tts"); }
-          catch (e) { console.error("start_tts (from TTS tab) failed:", e); }
-        }
-      });
-
       const el = (id) => document.getElementById(id);
-      let sttUp = false;      // did we already point the iframe at the live UI?
+
+      let cfg = null;          // current DesktopConfig (null until loaded/saved)
+      let frameSrc = "";       // computed iframe URL for the active config
+      let sttUp = false;       // have we pointed the iframe at the live UI yet?
       let ttsStarting = false;
+      let firstRun = false;    // showing the setup screen before any config exists
+
+      // Build the embedded-UI URL from the config: the iframe loads the STT server
+      // directly, so the page's own window.location-based WebSocket/health logic
+      // targets the right host in BOTH local and remote modes. mode + tts are passed
+      // so the TTS tab targets the configured TTS URL and hides "start" when remote.
+      function computeFrameSrc(c) {
+        const base = (c.stt_url || "").replace(/\/+$/, "");
+        const q = "?desktop=1&mode=" + encodeURIComponent(c.mode || "local") +
+                  "&tts=" + encodeURIComponent((c.tts_url || "").replace(/\/+$/, ""));
+        return base + "/" + q;
+      }
 
       function paint(dot, txt, s) {
         const d = el(dot), t = el(txt);
@@ -98,28 +174,164 @@
         return s;
       }
 
+      async function applyConfig() {
+        const remote = cfg.mode === "remote";
+        frameSrc = computeFrameSrc(cfg);
+        sttUp = false;
+        el("stt-frame").removeAttribute("src");
+        el("overlay").classList.remove("hidden");
+        el("overlay-msg").innerHTML = remote
+          ? "Connecting to the remote STT server…<br /><small>" + cfg.stt_url + "</small>"
+          : "Starting the Speech-to-Text server…<br /><small>First launch loads the model; this can take a while.</small>";
+
+        // Mode badge + TTS button visibility.
+        el("mode-badge").style.display = "inline-flex";
+        el("mode-badge").textContent = remote ? "Remote" : "Local";
+        el("tts-btn").style.display = remote ? "none" : "";
+
+        // Local + auto-start: launch STT now (on first-run save, the Rust side has
+        // not auto-started because no config existed at boot). Remote: never start.
+        if (!remote && cfg.auto_start_stt && invoke) {
+          try { await invoke("start_stt"); } catch (e) { console.error("start_stt:", e); }
+          if (cfg.auto_start_tts) { try { await invoke("start_tts"); } catch (e) {} }
+        }
+      }
+
       async function poll() {
         if (!invoke) { el("overlay-msg").textContent =
           "Not running inside the desktop app (Tauri API unavailable)."; return; }
+        if (!cfg) return; // waiting for first-run setup
         try {
           const stt = paint("stt-dot", "stt-txt", await invoke("stt_status"));
           const tts = paint("tts-dot", "tts-txt", await invoke("tts_status"));
 
-          // Reveal the real STT UI once :8000 is healthy.
-          if (stt.running && !sttUp) {
-            el("stt-frame").src = STT_UI_SRC;
+          if (stt.running && !sttUp && frameSrc) {
+            el("stt-frame").src = frameSrc;
             el("overlay").classList.add("hidden");
             sttUp = true;
           }
-          if (tts.running) ttsStarting = false;
-          el("tts-btn").disabled = tts.running || ttsStarting;
-          el("tts-btn").textContent = tts.running ? "Text-to-Speech ready"
-            : ttsStarting ? "Starting TTS…" : "Start Text-to-Speech";
+
+          if (cfg.mode !== "remote") {
+            if (tts.running) ttsStarting = false;
+            el("tts-btn").disabled = tts.running || ttsStarting;
+            el("tts-btn").textContent = tts.running ? "Text-to-Speech ready"
+              : ttsStarting ? "Starting TTS…" : "Start Text-to-Speech";
+          }
         } catch (e) { console.error(e); }
       }
 
-      el("tts-btn").addEventListener("click", async () => {
+      // --- Settings modal --------------------------------------------------
+      function selectedMode() {
+        return el("mode-remote").checked ? "remote" : "local";
+      }
+      function markModeCards() {
+        const r = el("mode-remote").checked;
+        el("mode-remote-l").classList.toggle("sel", r);
+        el("mode-local-l").classList.toggle("sel", !r);
+        // Auto-start only applies to Local mode.
+        el("cfg-autostart-wrap").style.opacity = r ? ".5" : "1";
+        el("cfg-autostart-stt").disabled = r;
+        el("cfg-autostart-tts").disabled = r;
+      }
+      function fillForm(c) {
+        (c.mode === "remote" ? el("mode-remote") : el("mode-local")).checked = true;
+        el("cfg-stt-url").value = c.stt_url || "";
+        el("cfg-tts-url").value = c.tts_url || "";
+        el("cfg-autostart-stt").checked = !!c.auto_start_stt;
+        el("cfg-autostart-tts").checked = !!c.auto_start_tts;
+        el("cfg-timeout").value = c.timeout_seconds || 30;
+        markModeCards();
+      }
+      function gatherForm() {
+        return {
+          mode: selectedMode(),
+          stt_url: el("cfg-stt-url").value.trim(),
+          tts_url: el("cfg-tts-url").value.trim(),
+          auto_start_stt: el("cfg-autostart-stt").checked,
+          auto_start_tts: el("cfg-autostart-tts").checked,
+          timeout_seconds: Math.max(1, Math.min(60, parseInt(el("cfg-timeout").value) || 30)),
+        };
+      }
+      function openSettings(setup) {
+        firstRun = !!setup;
+        el("cfg-title").textContent = setup ? "Welcome — connection setup" : "Connection settings";
+        el("cfg-sub").textContent = setup
+          ? "Choose how this desktop app connects to the STT and TTS servers, then Save & Continue."
+          : "Change how this desktop app connects to the STT and TTS servers.";
+        el("cfg-cancel-btn").style.display = setup ? "none" : "";
+        el("cfg-test-result").textContent = "";
+        fillForm(cfg || { mode: "local", stt_url: "http://localhost:8000",
+          tts_url: "http://localhost:8011", auto_start_stt: true, auto_start_tts: false, timeout_seconds: 30 });
+        el("settings").classList.remove("hidden");
+      }
+      function closeSettings() { el("settings").classList.add("hidden"); }
+
+      async function onModeChange() {
+        markModeCards();
+        // Prefill this mode's defaults for the URL/auto-start fields.
+        if (invoke) {
+          try {
+            const d = await invoke("default_config", { mode: selectedMode() });
+            el("cfg-stt-url").value = d.stt_url || "";
+            el("cfg-tts-url").value = d.tts_url || "";
+            el("cfg-autostart-stt").checked = !!d.auto_start_stt;
+            el("cfg-autostart-tts").checked = !!d.auto_start_tts;
+          } catch (e) { console.error(e); }
+        }
+      }
+
+      async function testConnection() {
         if (!invoke) return;
+        const f = gatherForm(), res = el("cfg-test-result");
+        res.className = "muted"; res.textContent = "Testing…";
+        try {
+          const [stt, tts] = await Promise.all([
+            invoke("test_connection", { url: f.stt_url, kind: "stt", timeoutSeconds: f.timeout_seconds }),
+            invoke("test_connection", { url: f.tts_url, kind: "tts", timeoutSeconds: f.timeout_seconds }),
+          ]);
+          res.className = "";
+          res.innerHTML =
+            (stt.reachable ? '<span class="ok-txt">STT reachable</span>' : '<span class="bad-txt">STT not reachable</span>') +
+            " — " + stt.message + "\n" +
+            (tts.reachable ? '<span class="ok-txt">TTS reachable</span>' : '<span class="bad-txt">TTS not reachable</span>') +
+            " — " + tts.message;
+        } catch (e) {
+          res.className = "bad-txt"; res.textContent = "Test failed: " + e;
+        }
+      }
+
+      async function saveAndContinue() {
+        if (!invoke) return;
+        const f = gatherForm();
+        if (!f.stt_url) { el("cfg-test-result").className = "bad-txt";
+          el("cfg-test-result").textContent = "Please enter an STT server URL."; return; }
+        // Warn (do not block) if the servers didn't answer a quick probe.
+        try {
+          const stt = await invoke("test_connection", { url: f.stt_url, kind: "stt", timeoutSeconds: Math.min(f.timeout_seconds, 4) });
+          if (!stt.reachable && !confirm("STT server did not respond at " + f.stt_url +
+              ".\n\nSave anyway and keep trying to connect?")) return;
+        } catch (e) { /* proceed; user may be offline intentionally */ }
+
+        try { await invoke("save_config", { config: f }); }
+        catch (e) { alert("Could not save settings:\n" + e); return; }
+        cfg = f;
+        closeSettings();
+        await applyConfig();
+      }
+
+      // --- TTS controls ----------------------------------------------------
+      // Bridge: the embedded TTS tab (cross-origin) asks us to launch the sidecar.
+      window.addEventListener("message", async (ev) => {
+        const msg = ev && ev.data;
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type === "sttlive:start-tts" && invoke && cfg && cfg.mode !== "remote") {
+          try { await invoke("start_tts"); }
+          catch (e) { console.error("start_tts (from TTS tab) failed:", e); }
+        }
+      });
+
+      el("tts-btn").addEventListener("click", async () => {
+        if (!invoke || (cfg && cfg.mode === "remote")) return;
         ttsStarting = true; el("tts-btn").disabled = true;
         el("tts-btn").textContent = "Starting TTS…";
         try { await invoke("start_tts"); }
@@ -127,11 +339,31 @@
       });
 
       el("reload-btn").addEventListener("click", () => {
-        if (sttUp) el("stt-frame").src = STT_UI_SRC; else location.reload();
+        if (sttUp && frameSrc) el("stt-frame").src = frameSrc; else location.reload();
       });
 
-      poll();
-      setInterval(poll, 1500);
+      // --- Settings wiring -------------------------------------------------
+      el("settings-btn").addEventListener("click", () => openSettings(false));
+      el("cfg-cancel-btn").addEventListener("click", closeSettings);
+      el("cfg-save-btn").addEventListener("click", saveAndContinue);
+      el("cfg-test-btn").addEventListener("click", testConnection);
+      el("mode-local").addEventListener("change", onModeChange);
+      el("mode-remote").addEventListener("change", onModeChange);
+
+      // --- boot ------------------------------------------------------------
+      (async function boot() {
+        if (!invoke) { el("overlay-msg").textContent =
+          "Not running inside the desktop app (Tauri API unavailable)."; return; }
+        try { cfg = await invoke("get_config"); } catch (e) { cfg = null; }
+        if (!cfg) {
+          // First launch: no saved config — show setup BEFORE starting/connecting.
+          openSettings(true);
+        } else {
+          await applyConfig();
+        }
+        setInterval(poll, 1500);
+        poll();
+      })();
     </script>
   </body>
 </html>

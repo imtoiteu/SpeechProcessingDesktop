@@ -242,6 +242,9 @@
         // --- server URL resolution (default: same host, sidecar port 8011) ---
         var LS_KEY = "ttsServerUrl";
         function defaultBase() {
+            // Prefer the TTS URL the desktop wrapper passed (?tts=…); otherwise the
+            // same host as this page on the sidecar port 8011.
+            if (TTS_URL_PARAM) return TTS_URL_PARAM.replace(/\/+$/, "");
             var p = location.protocol === "https:" ? "https:" : "http:";
             return p + "//" + (location.hostname || "localhost") + ":8011";
         }
@@ -273,10 +276,16 @@
         // In the STTLive desktop app the UI is embedded and the wrapper passes
         // ?desktop=1; there we can launch the TTS sidecar for the user. On the
         // plain web page we fall back to a "run the script" hint instead.
+        var QP = (function () { try { return new URLSearchParams(location.search); } catch (e) { return null; } })();
         var IS_DESKTOP = (function () {
-            try { if (new URLSearchParams(location.search).get("desktop") === "1") return true; } catch (e) {}
+            try { if (QP && QP.get("desktop") === "1") return true; } catch (e) {}
             try { return window.self !== window.top; } catch (e) { return true; }
         })();
+        // Runtime mode + configured TTS URL passed by the desktop wrapper.
+        // "remote" => the TTS server lives on another machine; we cannot launch it,
+        // so no "Start TTS Server" button (we only connect to the configured URL).
+        var TTS_MODE = (QP && QP.get("mode")) || "local";
+        var TTS_URL_PARAM = (QP && QP.get("tts")) || "";
         var ttsHealthy = false, ttsStartPolling = false;
 
         function setGenerateEnabled(on) { var g = $("ttsGenerate"); if (g) g.disabled = !on; }
@@ -325,7 +334,14 @@
                 setGenerateEnabled(false);
                 setSelectPlaceholder($("ttsModel"), "Start TTS server first");
                 setSelectPlaceholder($("ttsVoice"), "Start TTS server first");
-                if (IS_DESKTOP) {
+                if (IS_DESKTOP && TTS_MODE === "remote") {
+                    // Remote server: we cannot launch it — just report unreachable.
+                    if (startBtn) startBtn.classList.add("hidden");
+                    setSelectPlaceholder($("ttsModel"), "TTS server not reachable");
+                    setSelectPlaceholder($("ttsVoice"), "TTS server not reachable");
+                    setStatus("Cannot reach the remote TTS server at " + getBase() +
+                              ". Check the server and the URL in Settings.", true);
+                } else if (IS_DESKTOP) {
                     if (startBtn) { startBtn.classList.remove("hidden"); startBtn.disabled = false; startBtn.textContent = "Start TTS Server"; }
                     setStatus("TTS server is not running. Click “Start TTS Server” to launch it.", true);
                 } else {
@@ -343,6 +359,10 @@
             var startBtn = $("ttsStartServer");
             if (!IS_DESKTOP) {
                 setStatus("Start the TTS server in a terminal: ./scripts/run_tts_server.sh", true);
+                return;
+            }
+            if (TTS_MODE === "remote") {
+                setStatus("Remote TTS server cannot be started from here — check the server and its URL in Settings.", true);
                 return;
             }
             ttsStartPolling = true;

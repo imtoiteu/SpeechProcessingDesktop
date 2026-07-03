@@ -1,22 +1,22 @@
 // STTLive desktop launcher.
 //
-// A thin native wrapper around the two EXISTING local servers:
-//   * STT  — WhisperLiveKit `whisperlivekit-server` on http://localhost:8000
-//   * TTS  — VieNeu-TTS sidecar               on http://localhost:8011
+// A thin native wrapper around the STT + TTS servers:
+//   * STT  — WhisperLiveKit `whisperlivekit-server`  (default http://localhost:8000)
+//   * TTS  — VieNeu-TTS sidecar                       (default http://localhost:8011)
 //
-// It does NOT reimplement either engine. It only:
-//   1. checks whether each server is already up (health endpoint),
-//   2. starts a server (via the repo's platform launch scripts) if — and only if
-//      — it is not already running,
-//   3. shows the existing STT web UI inside a desktop window (see ui/index.html,
-//      which embeds :8000 in an iframe),
-//   4. exposes health/status + a "start TTS" command to the frontend,
-//   5. on exit, stops ONLY the child processes it started itself — never a
-//      server that was already running before the app launched.
+// It does NOT reimplement either engine. It supervises them according to a small
+// user-editable desktop config (see DesktopConfig) with two runtime modes:
 //
-// HOW it starts a server is NOT hard-coded per platform here. It is read from an
-// OS-aware command map (scripts/launch.config.json) so backend commands can be
-// changed without recompiling. macOS/Windows/Linux each map to their own script.
+//   * Local Managed Mode — start/stop the local servers via the repo's OS-aware
+//     launch scripts (scripts/launch.config.json), health-check them, and stop
+//     ONLY processes this app started.
+//   * Remote Server Mode — connect to STT/TTS URLs on another machine. Never start
+//     or kill any local process; only health-check and embed the remote UIs.
+//
+// The config is edited from the desktop Settings UI and persisted to the OS app
+// config dir (<config_dir>/STTLive/config.json). scripts/launch.config.json remains
+// the built-in START-COMMAND map for Local mode; the desktop config governs URLs,
+// mode, and auto-start.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
@@ -27,10 +27,75 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, RunEvent, State};
 
-const STT_HEALTH_URL: &str = "http://localhost:8000/health";
-const STT_UI_URL: &str = "http://localhost:8000";
-const TTS_HEALTH_URL: &str = "http://localhost:8011/tts/health";
-const TTS_UI_URL: &str = "http://localhost:8011";
+// =====================================================================
+// Desktop connection config (edited in the Settings UI, persisted to disk)
+// =====================================================================
+
+fn def_mode() -> String {
+    "local".into()
+}
+fn def_stt_url() -> String {
+    "http://localhost:8000".into()
+}
+fn def_tts_url() -> String {
+    "http://localhost:8011".into()
+}
+fn def_true() -> bool {
+    true
+}
+fn def_timeout() -> u64 {
+    30
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct DesktopConfig {
+    /// "local" (Local Managed) or "remote" (Remote Server).
+    #[serde(default = "def_mode")]
+    mode: String,
+    #[serde(default = "def_stt_url")]
+    stt_url: String,
+    #[serde(default = "def_tts_url")]
+    tts_url: String,
+    #[serde(default = "def_true")]
+    auto_start_stt: bool,
+    #[serde(default)]
+    auto_start_tts: bool,
+    #[serde(default = "def_timeout")]
+    timeout_seconds: u64,
+}
+
+fn default_config_local() -> DesktopConfig {
+    DesktopConfig {
+        mode: def_mode(),
+        stt_url: def_stt_url(),
+        tts_url: def_tts_url(),
+        auto_start_stt: true,
+        auto_start_tts: false,
+        timeout_seconds: def_timeout(),
+    }
+}
+
+impl DesktopConfig {
+    fn is_remote(&self) -> bool {
+        self.mode.eq_ignore_ascii_case("remote")
+    }
+    fn stt_base(&self) -> String {
+        self.stt_url.trim_end_matches('/').to_string()
+    }
+    fn tts_base(&self) -> String {
+        self.tts_url.trim_end_matches('/').to_string()
+    }
+    fn stt_health(&self) -> String {
+        format!("{}/health", self.stt_base())
+    }
+    fn tts_health(&self) -> String {
+        format!("{}/tts/health", self.tts_base())
+    }
+}
+
+// =====================================================================
+// OS-aware launch commands (Local mode only) — from scripts/launch.config.json
+// =====================================================================
 
 /// Which server a launch command starts.
 #[derive(Clone, Copy)]
@@ -73,6 +138,18 @@ struct AppState {
     repo_root: Mutex<Option<PathBuf>>,
     /// OS-aware launch commands resolved once at startup.
     cmds: Mutex<Option<PlatformCmds>>,
+    /// Current desktop connection config (None until loaded/saved).
+    config: Mutex<Option<DesktopConfig>>,
+}
+
+impl AppState {
+    fn config_or_default(&self) -> DesktopConfig {
+        self.config
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_else(default_config_local)
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -82,6 +159,13 @@ struct ServiceStatus {
     /// We spawned it and still track the child handle (so we may stop it).
     started_by_app: bool,
     ui_url: String,
+}
+
+#[derive(Serialize, Clone)]
+struct TestResult {
+    reachable: bool,
+    status: u16,
+    message: String,
 }
 
 /// Returns true if an HTTP server answers at `url` (any status = the port is
@@ -98,10 +182,38 @@ fn http_up(url: &str) -> bool {
     }
 }
 
+// =====================================================================
+// Config persistence (<OS config dir>/STTLive/config.json)
+// =====================================================================
+
+fn resolve_config_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .config_dir()
+        .ok()
+        .map(|d| d.join("STTLive").join("config.json"))
+}
+
+fn read_config_file(app: &tauri::AppHandle) -> Option<DesktopConfig> {
+    let p = resolve_config_path(app)?;
+    let s = std::fs::read_to_string(&p).ok()?;
+    serde_json::from_str::<DesktopConfig>(&s).ok()
+}
+
+fn write_config_file(app: &tauri::AppHandle, cfg: &DesktopConfig) -> Result<(), String> {
+    let p = resolve_config_path(app).ok_or("Could not resolve the OS config directory.")?;
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Create config dir failed: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&p, json).map_err(|e| format!("Write config failed: {e}"))
+}
+
+// =====================================================================
+// Repo + launch-command discovery (Local mode)
+// =====================================================================
+
 /// Find the Speech2Text repo root so we can locate `scripts/`.
 /// Priority: `$STTLIVE_REPO` → walk up from CWD → walk up from the executable.
-/// A directory qualifies when it contains the launch config or the macOS scripts
-/// (both are checked so detection works regardless of host OS).
 fn find_repo_root() -> Option<PathBuf> {
     let is_repo = |d: &Path| {
         d.join("scripts/launch.config.json").is_file()
@@ -150,8 +262,6 @@ fn platform_key() -> &'static str {
 
 /// Built-in fallback commands (identical to scripts/launch.config.json) used if
 /// the config file is missing or unparsable, so the app still works out of the box.
-/// Exactly one cfg block below is compiled, and it is the function's tail
-/// expression — no `return`, no unreachable code on any platform.
 fn default_cmds() -> PlatformCmds {
     #[cfg(target_os = "windows")]
     {
@@ -193,33 +303,23 @@ fn default_cmds() -> PlatformCmds {
     }
 }
 
-/// Load the OS-aware launch commands: `$STTLIVE_LAUNCH_CONFIG` or
-/// `<repo>/scripts/launch.config.json`, keyed by the current platform. Any
-/// problem (missing file, bad JSON, missing platform key) falls back to defaults.
+/// Load the OS-aware launch commands, keyed by the current platform, with a
+/// built-in fallback on any problem.
 fn load_launch_config(repo: &Path) -> PlatformCmds {
     let path = std::env::var("STTLIVE_LAUNCH_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| repo.join("scripts").join("launch.config.json"));
 
-    let parsed = std::fs::read_to_string(&path)
+    std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get(platform_key()).cloned())
-        .and_then(|pv| serde_json::from_value::<PlatformCmds>(pv).ok());
-
-    parsed.unwrap_or_else(|| {
-        eprintln!(
-            "STTLive: using built-in launch commands (config not found/invalid at {}).",
-            path.display()
-        );
-        default_cmds()
-    })
+        .and_then(|pv| serde_json::from_value::<PlatformCmds>(pv).ok())
+        .unwrap_or_else(default_cmds)
 }
 
-/// Spawn the launch command for a service. The macOS/Linux scripts `exec` their
-/// server, so the child's PID *is* the server — killing it stops the server
-/// cleanly. (On Windows, PowerShell cannot exec-replace; see the Windows notes
-/// in docs/DESKTOP_APP.md about process-tree cleanup.)
+/// Spawn the launch command for a service (Local mode only). The macOS/Linux
+/// scripts `exec` their server, so the child's PID *is* the server.
 fn spawn_service(repo: &Path, cmds: &PlatformCmds, svc: Service) -> std::io::Result<Child> {
     let cmd = cmds.get(svc);
     Command::new(&cmd.program)
@@ -239,46 +339,142 @@ fn stop_owned(slot: &Mutex<Option<Child>>) {
     }
 }
 
-fn status_of(url: &str, ui_url: &str, slot: &Mutex<Option<Child>>) -> ServiceStatus {
+fn status_of(health_url: &str, ui_url: &str, slot: &Mutex<Option<Child>>) -> ServiceStatus {
     let started_by_app = slot.lock().map(|g| g.is_some()).unwrap_or(false);
     ServiceStatus {
-        running: http_up(url),
+        running: http_up(health_url),
         started_by_app,
         ui_url: ui_url.to_string(),
     }
 }
 
+// =====================================================================
+// Tauri commands
+// =====================================================================
+
+/// Return the saved desktop config, or null on first launch (no file yet).
+#[tauri::command]
+fn get_config(app: tauri::AppHandle, state: State<AppState>) -> Option<DesktopConfig> {
+    if let Some(c) = state.config.lock().ok().and_then(|g| g.clone()) {
+        return Some(c);
+    }
+    let cfg = read_config_file(&app);
+    if let Some(c) = &cfg {
+        if let Ok(mut g) = state.config.lock() {
+            *g = Some(c.clone());
+        }
+    }
+    cfg
+}
+
+/// The built-in defaults for a mode (used by the Settings UI to prefill).
+#[tauri::command]
+fn default_config(mode: String) -> DesktopConfig {
+    let mut c = default_config_local();
+    if mode.eq_ignore_ascii_case("remote") {
+        c.mode = "remote".into();
+        c.stt_url = String::new();
+        c.tts_url = String::new();
+        c.auto_start_stt = false;
+        c.auto_start_tts = false;
+    }
+    c
+}
+
+/// Persist the config and update in-memory state.
+#[tauri::command]
+fn save_config(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    config: DesktopConfig,
+) -> Result<(), String> {
+    write_config_file(&app, &config)?;
+    if let Ok(mut g) = state.config.lock() {
+        *g = Some(config);
+    }
+    Ok(())
+}
+
+/// Health-check an arbitrary STT/TTS URL from the native side (no browser CORS).
+/// `kind` is "stt" or "tts".
+#[tauri::command]
+fn test_connection(url: String, kind: String, timeout_seconds: Option<u64>) -> TestResult {
+    let base = url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return TestResult {
+            reachable: false,
+            status: 0,
+            message: "No URL set.".into(),
+        };
+    }
+    let health = if kind.eq_ignore_ascii_case("tts") {
+        format!("{base}/tts/health")
+    } else {
+        format!("{base}/health")
+    };
+    let secs = timeout_seconds.unwrap_or(5).clamp(1, 60);
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(secs))
+        .build();
+    match agent.get(&health).call() {
+        Ok(r) => TestResult {
+            reachable: true,
+            status: r.status(),
+            message: format!("Reachable (HTTP {}).", r.status()),
+        },
+        Err(ureq::Error::Status(code, _)) => TestResult {
+            reachable: true,
+            status: code,
+            message: format!("Reachable (HTTP {code})."),
+        },
+        Err(ureq::Error::Transport(e)) => TestResult {
+            reachable: false,
+            status: 0,
+            message: format!("Not reachable: {e}"),
+        },
+    }
+}
+
 #[tauri::command]
 fn stt_status(state: State<AppState>) -> ServiceStatus {
-    status_of(STT_HEALTH_URL, STT_UI_URL, &state.stt)
+    let cfg = state.config_or_default();
+    status_of(&cfg.stt_health(), &cfg.stt_base(), &state.stt)
 }
 
 #[tauri::command]
 fn tts_status(state: State<AppState>) -> ServiceStatus {
-    status_of(TTS_HEALTH_URL, TTS_UI_URL, &state.tts)
+    let cfg = state.config_or_default();
+    status_of(&cfg.tts_health(), &cfg.tts_base(), &state.tts)
 }
 
-/// Start STT if nothing is already serving :8000. Safe to call repeatedly.
+/// Start STT if nothing is already serving it (Local mode only).
 #[tauri::command]
 fn start_stt(state: State<AppState>) -> Result<ServiceStatus, String> {
-    ensure_started(&state, STT_HEALTH_URL, &state.stt, Service::Stt)?;
-    Ok(status_of(STT_HEALTH_URL, STT_UI_URL, &state.stt))
+    let cfg = state.config_or_default();
+    if cfg.is_remote() {
+        return Err("Remote Server Mode: STT is not managed by this app.".into());
+    }
+    ensure_started(&state, &cfg.stt_health(), &state.stt, Service::Stt)?;
+    Ok(status_of(&cfg.stt_health(), &cfg.stt_base(), &state.stt))
 }
 
-/// Start TTS only when needed (e.g. the user opens the Text-to-Speech tab).
-/// No-ops if a TTS server is already up — including an external one, which we
-/// will never adopt or kill.
+/// Start TTS on demand (Local mode only). No-ops if TTS is already up.
 #[tauri::command]
 fn start_tts(state: State<AppState>) -> Result<ServiceStatus, String> {
-    ensure_started(&state, TTS_HEALTH_URL, &state.tts, Service::Tts)?;
-    Ok(status_of(TTS_HEALTH_URL, TTS_UI_URL, &state.tts))
+    let cfg = state.config_or_default();
+    if cfg.is_remote() {
+        return Err("Remote Server Mode: TTS is not managed by this app.".into());
+    }
+    ensure_started(&state, &cfg.tts_health(), &state.tts, Service::Tts)?;
+    Ok(status_of(&cfg.tts_health(), &cfg.tts_base(), &state.tts))
 }
 
 /// Stop a server the app started. Refuses (harmlessly) if we don't own it.
 #[tauri::command]
 fn stop_tts(state: State<AppState>) -> ServiceStatus {
     stop_owned(&state.tts);
-    status_of(TTS_HEALTH_URL, TTS_UI_URL, &state.tts)
+    let cfg = state.config_or_default();
+    status_of(&cfg.tts_health(), &cfg.tts_base(), &state.tts)
 }
 
 /// Core "start only if needed, don't double-start, don't adopt external" logic.
@@ -288,13 +484,11 @@ fn ensure_started(
     slot: &Mutex<Option<Child>>,
     svc: Service,
 ) -> Result<(), String> {
-    // Already serving (ours or external) → nothing to do.
     if http_up(health_url) {
-        return Ok(());
+        return Ok(()); // already serving (ours or external)
     }
-    // We already spawned one that's still booting → don't spawn a second.
     if slot.lock().map(|g| g.is_some()).unwrap_or(false) {
-        return Ok(());
+        return Ok(()); // we already spawned one that's still booting
     }
     let repo = state
         .repo_root
@@ -324,6 +518,10 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            get_config,
+            default_config,
+            save_config,
+            test_connection,
             stt_status,
             tts_status,
             start_stt,
@@ -337,35 +535,63 @@ fn main() {
                 if let Ok(mut guard) = state.repo_root.lock() {
                     *guard = Some(r.clone());
                 }
-                // Resolve the OS-aware launch commands once, up front.
                 let cmds = load_launch_config(r);
                 if let Ok(mut guard) = state.cmds.lock() {
                     *guard = Some(cmds);
                 }
             } else {
                 eprintln!(
-                    "STTLive: repo root not found. STT will NOT be auto-started. \
-                     Set STTLIVE_REPO to the Speech2Text checkout."
+                    "STTLive: repo root not found. Local Managed Mode cannot auto-start \
+                     servers. Set STTLIVE_REPO to the Speech2Text checkout."
                 );
             }
 
-            // Auto-start STT — but only if :8000 isn't already served by an
-            // external process (which we must leave untouched).
-            if !http_up(STT_HEALTH_URL) {
-                if let Some(r) = &repo {
-                    let cmds = state
-                        .cmds
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.clone())
-                        .unwrap_or_else(default_cmds);
-                    match spawn_service(r, &cmds, Service::Stt) {
-                        Ok(child) => {
-                            if let Ok(mut guard) = state.stt.lock() {
-                                *guard = Some(child);
+            // Load the saved desktop config (if any). On FIRST LAUNCH there is no
+            // file: do NOT auto-start anything — the frontend shows the setup UI and
+            // the user confirms the config before we start/connect.
+            let handle = app.handle().clone();
+            let cfg = read_config_file(&handle);
+            if let Some(c) = &cfg {
+                if let Ok(mut guard) = state.config.lock() {
+                    *guard = Some(c.clone());
+                }
+                // Local Managed Mode: honor auto-start. Remote Mode: never start.
+                if !c.is_remote() {
+                    if c.auto_start_stt && !http_up(&c.stt_health()) {
+                        if let Some(r) = &repo {
+                            let cmds = state
+                                .cmds
+                                .lock()
+                                .ok()
+                                .and_then(|g| g.clone())
+                                .unwrap_or_else(default_cmds);
+                            match spawn_service(r, &cmds, Service::Stt) {
+                                Ok(child) => {
+                                    if let Ok(mut g) = state.stt.lock() {
+                                        *g = Some(child);
+                                    }
+                                }
+                                Err(e) => eprintln!("STTLive: failed to start STT: {e}"),
                             }
                         }
-                        Err(e) => eprintln!("STTLive: failed to start STT: {e}"),
+                    }
+                    if c.auto_start_tts && !http_up(&c.tts_health()) {
+                        if let Some(r) = &repo {
+                            let cmds = state
+                                .cmds
+                                .lock()
+                                .ok()
+                                .and_then(|g| g.clone())
+                                .unwrap_or_else(default_cmds);
+                            match spawn_service(r, &cmds, Service::Tts) {
+                                Ok(child) => {
+                                    if let Ok(mut g) = state.tts.lock() {
+                                        *g = Some(child);
+                                    }
+                                }
+                                Err(e) => eprintln!("STTLive: failed to start TTS: {e}"),
+                            }
+                        }
                     }
                 }
             }

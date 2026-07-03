@@ -109,6 +109,86 @@ the exact program + args used to start STT and TTS:
 - If the file is missing or malformed, the app falls back to built-in defaults that are
   identical to the values above, so it still works out of the box.
 
+## Connection modes & the Settings UI
+
+The desktop app has a small **Settings** panel (top-bar **Settings** button, and a
+one-time **setup screen on first launch**) so you never hand-edit JSON. It is
+**desktop-only** — the plain web page at `:8000` never shows it. Two runtime modes:
+
+### Local Managed Mode (default)
+
+The app **starts and stops the servers on this machine** using the OS-aware launch
+scripts, exactly as before. Defaults:
+
+| Field | Default |
+|---|---|
+| STT URL | `http://localhost:8000` |
+| TTS URL | `http://localhost:8011` |
+| Auto-start STT | on |
+| Auto-start TTS | off (lazy — starts when you open the Text→Speech tab or click Start) |
+
+The current macOS STT command and TTS script are unchanged; the app still tracks
+which processes it started and stops **only those** on exit.
+
+### Remote Server Mode
+
+The app **connects to STT/TTS on another machine** (a LAN box, a workstation, a
+server) and **never starts or kills any local process**. You provide the URLs, e.g.:
+
+| Field | Example |
+|---|---|
+| STT URL | `http://192.168.1.50:8000` |
+| TTS URL | `http://192.168.1.50:8011` |
+| Auto-start STT / TTS | forced off |
+
+- Health checks use the configured URLs; the embedded UI loads directly from the STT
+  URL, so its **WebSocket is derived from that host** automatically. TTS API calls use
+  the configured TTS URL (passed to the TTS tab).
+- **To use a LAN IP / domain:** run `whisperlivekit-server --host 0.0.0.0 --port 8000`
+  (and the TTS sidecar) on the remote box, then enter `http://<ip-or-host>:8000` /
+  `:8011` here. Ensure the firewall allows those ports.
+- The remote box should run **this repo's STTLive server** for full parity (the
+  `?desktop=1`/`mode`/`tts` handling and the mic guard). A stock `whisperlivekit-server`
+  still works for basic streaming/file STT.
+
+### First launch vs later launches
+
+- **First launch** (no saved config): the **setup screen appears before anything
+  starts**. Pick a mode, review URLs, optionally **Test connection**, then
+  **Save & Continue**. Nothing is auto-started until you confirm.
+- **Later launches**: the saved config loads automatically. Local + auto-start →
+  start/check local STT as before; Remote → only connect. Use **Settings** to change it.
+
+### Test connection
+
+**Test connection** probes `GET <STT URL>/health` and `GET <TTS URL>/tts/health`
+**from the native side** (no browser CORS issues) and reports *reachable / not
+reachable* for each. Saving is **not blocked** if a server is unreachable — you get a
+clear warning and can save anyway (useful when the remote box isn't up yet).
+
+### Where the config is saved
+
+The OS-standard app config directory (Tauri `config_dir()` API), **not** in the repo:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/STTLive/config.json` |
+| Windows | `%APPDATA%\STTLive\config.json` |
+| Linux | `~/.config/STTLive/config.json` |
+
+`scripts/launch.config.json` remains the built-in **start-command** map for Local
+mode; this per-user config governs **URLs, mode, and auto-start** and overrides the
+hardcoded localhost assumptions.
+
+### Microphone / WebSocket limits in Remote Mode
+
+- **Live microphone** needs a *secure context*. A remote **`http://` origin is not
+  secure**, so `navigator.mediaDevices` is unavailable and live mic capture will not
+  work against a plain-HTTP remote server (the UI says so clearly — it is not faked).
+  Serve the remote STT over **HTTPS** for live mic, or use live mic only in Local mode.
+- **File/batch STT and TTS still work** over remote `http://` (they use the WebSocket
+  upload / HTTP APIs, which are not gated by secure context).
+
 ## Prerequisites (MacBook, Apple Silicon)
 
 The desktop app is **Mac-only** to build and run. On the Mac you need:
@@ -250,8 +330,18 @@ Run these on the Mac after pulling the branch and doing `cd desktop && npm insta
 **Rebuild** after pulling (`npm run build`) — the mic Info.plist/entitlement only
 take effect in a built `.app`, and dev mode may not prompt for the mic.
 
-- [ ] **STT launch** — start the app with nothing on :8000; STT auto-starts and the
-      UI appears once `/health` is ready. (First run downloads/loads the MLX model.)
+- [ ] **First-launch setup** — with no `~/Library/Application Support/STTLive/config.json`,
+      the app shows the **setup screen first** and does **not** auto-start STT until you
+      **Save & Continue**. Pick Local Managed, Save → STT then starts.
+- [ ] **Test connection** — in Settings, click **Test connection**: STT/TTS show
+      *reachable* when up, *not reachable* when down; saving still works after a warning.
+- [ ] **Settings persists** — quit and relaunch: it loads the saved config (no setup
+      screen), and `config.json` exists at the path above.
+- [ ] **Remote mode** — set Remote Server Mode with another machine's `http://IP:8000` /
+      `:8011` (server started with `--host 0.0.0.0`); the app connects, starts **no**
+      local process, and file/batch STT + TTS work. (Live mic needs HTTPS — see limits.)
+- [ ] **STT launch (Local)** — with Local mode, STT auto-starts and the UI appears once
+      `/health` is ready. (First run downloads/loads the MLX model.)
 - [ ] **Dropdowns populate** — the language selector shows Auto/Vietnamese/English and
       the model selector shows `large-v3-turbo` (this was the blank-dropdown bug).
 - [ ] **No double-start** — start `whisperlivekit-server` manually first, then launch
