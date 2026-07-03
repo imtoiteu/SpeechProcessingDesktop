@@ -1,5 +1,7 @@
 # STTLive — Local-first Vietnamese Speech-to-Text + Text-to-Speech
 
+*Language: **English** · [Tiếng Việt](README.vi.md)*
+
 A local-first Vietnamese **STT + TTS** workbench optimized for Apple Silicon, built on
 [WhisperLiveKit](WhisperLiveKit/) (streaming/batch ASR) with an integrated
 [VieNeu-TTS](VieNeu-TTS/) text-to-speech sidecar. Everything runs on-device; nothing is
@@ -49,19 +51,30 @@ The reproducible, scripted path — no dependence on old local venvs or folders.
 ```bash
 git clone https://github.com/imtoiteu/SpeechProcessingDesktop.git
 cd SpeechProcessingDesktop
-./scripts/bootstrap_macos.sh        # STT venv + TTS venv + desktop deps (no heavy models)
-./scripts/build_desktop_macos.sh    # build STTLive.app
-./scripts/open_desktop_macos.sh     # launch it
+./scripts/diagnose_env.sh           # optional: environment report (read-only)
+./scripts/bootstrap_macos.sh        # sets up the primary STT + TTS venvs + desktop deps (no heavy models)
+./scripts/setup_chunkformer.sh      # optional: required only for Batch + ChunkFormer (Vietnamese); skip if not needed
+./scripts/build_desktop_macos.sh    # builds the Tauri app → STTLive.app
+./scripts/open_desktop_macos.sh     # opens the built app
 ```
 
-**Daily use:** `./scripts/open_desktop_macos.sh`
+`setup_chunkformer.sh` is **required for Batch + ChunkFormer** and can be **skipped** if
+you don't need ChunkFormer — streaming, batch Whisper, and TTS all work without it.
+
+**Daily use** (Local Managed Mode auto-starts STT; TTS lazy-starts from the Text→Speech
+tab — no need to start servers manually):
+
+```bash
+./scripts/open_desktop_macos.sh
+```
 
 **Manual / debug (run servers directly, no app):**
 
 ```bash
-./scripts/run_web_macos.sh      # STT web UI + API   → http://localhost:8000
-./scripts/run_stt_server.sh     # same STT server (streaming + batch)
-./scripts/run_tts_server.sh     # TTS sidecar        → http://localhost:8011
+./scripts/run_stt_server.sh     # WhisperLiveKit STT (streaming + batch) → http://localhost:8000
+./scripts/run_tts_server.sh     # VieNeu-TTS sidecar                     → http://localhost:8011
+./scripts/run_web_macos.sh      # STT web/debug UI + API                 → http://localhost:8000
+./scripts/dev_desktop_macos.sh  # Tauri dev mode (hot-reload)
 ```
 
 **Optional add-ons:** `./scripts/bootstrap_macos.sh --warm-tts` (prefetch TTS model),

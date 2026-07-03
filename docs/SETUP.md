@@ -1,5 +1,7 @@
 # SETUP — reproducible clone → run → build
 
+*Language: **English** · [Tiếng Việt](SETUP.vi.md)*
+
 This is the single reference for getting a **clean clone** running without depending on
 any local machine state (old venvs, stray folders, global Python). Everything is driven
 by scripts under [`scripts/`](../scripts).
@@ -91,20 +93,31 @@ Optional third venv:
 them. `./scripts/diagnose_env.sh` reports which venvs exist and whether the critical
 imports resolve, so you can tell the current ones from the old ones at a glance.
 
+> **Do not copy `.venv` folders between machines.** Virtual environments hard-code
+> absolute paths and platform-specific binary wheels (mlx-whisper, llama-cpp-python's
+> Metal build, torch). Always recreate them on each machine with
+> `./scripts/bootstrap_macos.sh` (and `./scripts/setup_chunkformer.sh` if needed). All
+> `.venv*` folders are git-ignored for the same reason.
+
 ## E. UI feature → backend mapping
 
 | UI feature | Endpoint / backend |
 |---|---|
-| **Streaming mic** | WebSocket `ws://<stt>/asr` (MLX-Whisper in-process singleton) |
+| **Streaming mic** | WebSocket `ws://<stt>/asr` — MLX-Whisper `large-v3-turbo` (in-process singleton) on macOS Apple Silicon |
+| **Microphone playback** | the desktop WebView recording is re-encoded to **WAV/PCM** so it replays reliably in the app (Safari/WKWebView can't replay its raw MediaRecorder blob) |
 | **Batch file/video** | `POST <stt>/v1/audio/transcriptions` |
 | **Batch + ChunkFormer (Vietnamese)** | same endpoint → routed to the ChunkFormer subprocess (`.venv-chunkformer`) |
 | **Batch + tiny/base/small/medium/large-v3-turbo** | same endpoint → per-model MLX-Whisper |
-| **TTS** | `http://<tts>/tts/*` on `:8011` (or the configured TTS URL) |
-| **Desktop Settings** | selects **Local Managed** vs **Remote Server** mode + URLs |
+| **TTS** | `http://<tts>/tts/*` on `:8011` (or the configured TTS URL); health `GET /tts/health`; models `q4` / `q8` / `ngochuyen` + a voice dropdown |
+| **Desktop Settings** | selects **Local Managed** vs **Remote Server** mode, STT URL, TTS URL, auto-start STT, auto-start TTS, timeout |
 
 The server logs the routing decision for every batch request (requested model, selected
 backend, ChunkFormer/mlx-whisper/fallback, elapsed time) and logs the streaming
 backend/model once per `/asr` session — so you can confirm which engine ran.
+
+> **ChunkFormer warm-up:** the **first** ChunkFormer batch run is slower because the
+> model loads/warms up on demand; **subsequent** runs are faster as long as the STT
+> server process stays alive (it caches the loaded model).
 
 ## F. Local Managed Mode
 
